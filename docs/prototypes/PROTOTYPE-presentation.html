@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tally presentation prototype (throwaway)</title>
+<!--
+  PROTOTYPE, THROWAWAY. Three layout variants (A Ledger, B Cards, C Table) of Tally's
+  menu bar pins, popover, and mobile overview, switchable via ?variant=A|B|C.
+  Resolves https://github.com/MaxAnderson95/tally/issues/12. Synthetic data only.
+  Provider logos are fetched once from models.dev (the source OpenChamber uses) and inlined.
+-->
+<style>
+  /* ---------- design tokens ---------- */
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+    --ink: #1d1d1f; --ink-2: #6e6e73; --ink-3: #a1a1a6;
+    --paper: #f5f5f7; --paper-2: #ffffff; --rule: rgba(0,0,0,.09);
+    --track: rgba(0,0,0,.09); --fill: #1d1d1f;
+    --hover: rgba(0,0,0,.04); --press: rgba(0,0,0,.08);
+    --accent: #1d1d1f; --on-accent: #fff;
+    --warn-bg: rgba(0,0,0,.05);
+    --radius: 10px;
+  }
+  .dark {
+    --ink: #f5f5f7; --ink-2: #a1a1a6; --ink-3: #6e6e73;
+    --paper: #1c1c1e; --paper-2: #2c2c2e; --rule: rgba(255,255,255,.1);
+    --track: rgba(255,255,255,.14); --fill: #f5f5f7;
+    --hover: rgba(255,255,255,.05); --press: rgba(255,255,255,.1);
+    --accent: #f5f5f7; --on-accent: #1c1c1e;
+    --warn-bg: rgba(255,255,255,.07);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font); font-size: 13px; line-height: 1.35; color: #1d1d1f;
+    background: #d9d9de; padding: 24px 300px 120px 24px; font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (max-width: 1100px) { body { padding-right: 24px; } #proto-controls { position: static; width: auto; margin-bottom: 16px; } }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible, [tabindex]:focus-visible { outline: 2px solid #2456e6; outline-offset: 2px; border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  /* ---------- stage layout ---------- */
+  #stage { max-width: 1180px; margin: 0 auto; }
+  .stage-note { color: #3a3a3c; margin: 0 0 14px; max-width: 70ch; }
+  .menubars { display: grid; gap: 8px; margin-bottom: 26px; }
+  .surfaces { display: grid; grid-template-columns: auto auto; gap: 40px; justify-content: start; align-items: start; }
+  @media (max-width: 860px) { .surfaces { grid-template-columns: 1fr; } }
+  .surface-label { color: #3a3a3c; margin: 0 0 8px; font-size: 12px; }
+
+  /* ---------- menu bar ---------- */
+  .menubar {
+    height: 24px; display: flex; align-items: center; justify-content: flex-end; padding: 0 12px;
+    font-size: 12px; font-weight: 500; border-radius: 6px; letter-spacing: 0;
+    box-shadow: 0 1px 0 rgba(0,0,0,.08);
+  }
+  .menubar.light { background: linear-gradient(#f7f7f9, #ececf0); color: #1d1d1f; }
+  .menubar.dark  { background: linear-gradient(#2a2a2d, #202023); color: #f5f5f7; }
+  .menubar .sys { display: flex; gap: 14px; margin-left: 14px; opacity: .85; }
+  .pins { display: flex; gap: 0; align-items: center; height: 100%; }
+  .pin {
+    display: flex; align-items: center; gap: 3px; height: 100%; padding: 0 4px; position: relative;
+    border-radius: 4px; cursor: default; margin-left: 2px;
+  }
+  .pin:hover { background: rgba(127,127,127,.18); }
+  .pin .logo { display: inline-flex; }
+  .pin svg { width: 15px; height: 15px; display: block; }
+  .provider-head svg, .pn svg, .ppill svg { width: 12px; height: 12px; }
+  .pin .pct { text-align: left; }
+  .pin .pct.stack { display: flex; flex-direction: column; font-size: 9.5px; line-height: 1.05; font-weight: 600; letter-spacing: -.01em; }
+  .pin .pct.unknown { font-weight: 600; }
+  .pin .warn { width: 10px; height: 10px; margin-left: -1px; }
+  .pin .id-underline { position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px; border-radius: 1px; }
+  .pin .id-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .pin.tally-only svg { width: 14px; height: 14px; }
+  .tip {
+    position: fixed; z-index: 50; pointer-events: none; background: #1d1d1f; color: #fff;
+    padding: 5px 8px; border-radius: 6px; font-size: 12px; max-width: 320px; white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25); display: none;
+  }
+
+  /* ---------- popover frame ---------- */
+  .popover {
+    width: 360px; background: var(--paper); color: var(--ink); border-radius: 12px; position: relative;
+    box-shadow: 0 0 0 .5px rgba(0,0,0,.2), 0 10px 30px rgba(0,0,0,.25); overflow: hidden;
+  }
+  .popover.wide { width: 440px; }
+  .popover.clipped .body { max-height: 720px; overflow: auto; }
+  .phone {
+    width: 390px; height: 780px; background: var(--paper); color: var(--ink); border-radius: 44px; position: relative;
+    box-shadow: 0 0 0 10px #111, 0 0 0 12px #333, 0 20px 40px rgba(0,0,0,.35); overflow: hidden;
+  }
+  .phone.narrow { width: 320px; height: 680px; }
+  .phone .body { position: absolute; inset: 0; overflow: auto; padding-top: 54px; padding-bottom: 28px; }
+  .phone .statusbar { position: absolute; top: 0; left: 0; right: 0; height: 54px; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 30px 8px; font-size: 15px; font-weight: 600; pointer-events: none; z-index: 2; }
+  .phone .home { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 130px; height: 5px; border-radius: 3px; background: var(--ink); opacity: .7; }
+
+  /* ---------- desktop browser frame ---------- */
+  .browser { background: var(--paper); color: var(--ink); border-radius: 10px; position: relative; overflow: hidden; box-shadow: 0 0 0 .5px rgba(0,0,0,.25), 0 14px 40px rgba(0,0,0,.25); }
+  .browser .chrome { height: 38px; display: flex; align-items: center; gap: 7px; padding: 0 14px; background: var(--paper-2); border-bottom: 1px solid var(--rule); }
+  .browser .chrome > span { width: 11px; height: 11px; border-radius: 50%; background: var(--ink-3); opacity: .5; }
+  .browser .chrome .url { margin-left: 14px; flex: 1; max-width: 420px; height: 24px; border-radius: 6px; background: var(--track); font-size: 12px; color: var(--ink-2); display: flex; align-items: center; justify-content: center; }
+  .browser .page { padding: 10px 0 24px; }
+  .browser .hdr { padding: 12px 28px 12px; }
+  .browser .hdr h1 { font-size: 22px; letter-spacing: -.02em; }
+  .browser .overlay { max-width: 520px; left: auto; right: 0; box-shadow: -8px 0 30px rgba(0,0,0,.15); border-left: 1px solid var(--rule); }
+  .desk { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; padding: 0 14px; align-items: start; }
+  .desk-activity { position: sticky; top: 0; }
+  .A.desk .desk-accounts { columns: 2; column-gap: 24px; }
+  .A.desk .acct { break-inside: avoid; }
+  .A.desk .section-title, .A.desk .provider-head { column-span: all; }
+  .B.desk { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .B.desk .desk-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-content: start; }
+  .B.desk .desk-accounts .section-title, .B.desk .desk-accounts .provider-head { grid-column: 1 / -1; padding-bottom: 0; }
+  .B.desk .card { margin: 0; }
+  .B.desk .act.card { margin: 34px 0 0; }
+  .C.desk { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .C.desk td.reset { max-width: none; }
+
+  /* ---------- shared bits inside surfaces ---------- */
+  .hdr { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px 8px; }
+  .hdr h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  .hdr .meta { color: var(--ink-2); font-size: 12px; display: flex; gap: 10px; align-items: baseline; }
+  .hdr .meta button { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--ink-3); }
+  .phone .hdr { padding: 6px 20px 10px; }
+  .phone .hdr h1 { font-size: 26px; letter-spacing: -.02em; }
+  .section-title { padding: 12px 14px 4px; color: var(--ink-2); font-size: 12px; font-weight: 500; }
+  .phone .section-title { padding: 14px 20px 6px; font-size: 13px; }
+  .provider-head { display: flex; align-items: center; gap: 6px; padding: 8px 14px 2px; color: var(--ink-2); font-size: 12px; }
+  .phone .provider-head { padding: 10px 20px 2px; }
+  .provider-head svg { width: 11px; height: 11px; }
+  .bar { height: 4px; background: var(--track); border-radius: 2px; position: relative; overflow: hidden; }
+  .bar > i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--fill); border-radius: 2px; }
+  .bar.unknown { background: repeating-linear-gradient(90deg, var(--track) 0 3px, transparent 3px 6px); }
+  .bar.zero > i { width: 0; }
+  .pct-big { font-weight: 600; letter-spacing: -.01em; }
+  .muted { color: var(--ink-2); }
+  .faint { color: var(--ink-3); }
+  .warnmark { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); }
+  .warnmark svg { width: 12px; height: 12px; flex: none; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--rule); font-size: 12px; color: var(--ink); background: var(--paper-2);
+  }
+  .chip svg { width: 12px; height: 12px; flex: none; }
+  .chip.action:hover { background: var(--hover); }
+  .chip.warn { background: var(--warn-bg); border-color: transparent; font-weight: 500; }
+  .acct-logo { display: inline-flex; flex: none; }
+  .acct-logo svg { width: 16px; height: 16px; }
+  .phone .acct-logo svg { width: 18px; height: 18px; }
+  .rule { height: 1px; background: var(--rule); margin: 6px 14px; }
+  .phone .rule { margin: 6px 20px; }
+  .details { padding: 4px 14px 10px 14px; font-size: 12px; color: var(--ink-2); }
+  .phone .details { padding: 4px 20px 12px; font-size: 13px; }
+  .details dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 16px; margin: 6px 0 0; }
+  .details dt { color: var(--ink-3); text-align: left; }
+  .details dd { margin: 0; color: var(--ink-2); text-align: right; }
+  .details .sub { margin-top: 8px; color: var(--ink); font-weight: 500; }
+  .textbtn { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--ink-3); }
+  .textbtn:hover { text-decoration-color: var(--ink); }
+  .seg { display: inline-flex; background: var(--track); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { padding: 3px 9px; border-radius: 5px; font-size: 12px; color: var(--ink-2); }
+  .seg button[aria-pressed="true"] { background: var(--paper-2); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .empty { padding: 10px 14px 14px; color: var(--ink-2); }
+
+  /* overlay panel (credits, info) inside a surface */
+  .overlay { position: absolute; inset: 0; background: var(--paper); z-index: 5; display: flex; flex-direction: column; }
+  .overlay .ohdr { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; border-bottom: 1px solid var(--rule); }
+  .phone .overlay .ohdr { padding: 58px 20px 10px; }
+  .overlay .ohdr h2 { font-size: 14px; margin: 0; font-weight: 600; flex: 1; }
+  .overlay .obody { padding: 10px 14px 14px; overflow: auto; font-size: 12.5px; }
+  .phone .overlay .obody { padding: 12px 20px 30px; font-size: 14px; }
+  .overlay p { margin: 0 0 8px; color: var(--ink-2); }
+  .credit { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  .credit .when { flex: 1; }
+  .credit .when b { display: block; font-weight: 500; color: var(--ink); }
+  .credit .when span { color: var(--ink-2); font-size: 12px; }
+  .btn { padding: 5px 12px; border-radius: 7px; border: 1px solid var(--rule); background: var(--paper-2); font-size: 12.5px; font-weight: 500; }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+  .btn[disabled] { opacity: .45; cursor: default; }
+  .confirm { margin: 8px 0 2px; padding: 10px 12px; background: var(--paper-2); border: 1px solid var(--rule); border-radius: 8px; }
+  .confirm p { color: var(--ink); margin-bottom: 8px; }
+  .confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .outcome { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--paper-2); border: 1px solid var(--rule); color: var(--ink); }
+  .outcome.warn { background: var(--warn-bg); }
+  .outcome .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+  /* trend */
+  .trend { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; align-items: end; height: 34px; }
+  .trend i { display: block; background: var(--ink-3); border-radius: 1px 1px 0 0; min-height: 1px; }
+  .trend i.in { background: var(--ink); }
+  .trend-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
+
+  /* ---------- Variant A: Ledger ---------- */
+  .A .acct { display: grid; grid-template-columns: 3px 1fr; margin: 0 14px 8px; gap: 0 10px; }
+  .phone .A .acct { margin: 0 20px 10px; }
+  .A .acct .spine { border-radius: 2px; }
+  .A .acct .top { display: flex; align-items: baseline; gap: 6px; padding: 2px 0 2px; cursor: pointer; }
+  .A .acct .top:hover .name { text-decoration: underline; text-decoration-color: var(--ink-3); text-underline-offset: 2px; }
+  .A .acct .name { font-weight: 600; }
+  .A .acct .plan { color: var(--ink-2); font-size: 12px; }
+  .A .acct .top .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .A .win { display: grid; grid-template-columns: 7.2em 1fr 3.6em; gap: 0 10px; align-items: center; padding: 3px 0; }
+  .phone .A .win { grid-template-columns: 7.6em 1fr 3.8em; padding: 4px 0; }
+  .A .win .lbl { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .A .win .pct { text-align: right; font-weight: 500; }
+  .A .win .reset { grid-column: 2 / 4; font-size: 11.5px; color: var(--ink-3); margin-top: -1px; }
+  .phone .A .win .reset { font-size: 12px; }
+  .A .acct .foot { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 0 2px; }
+  .A .act .totals { display: grid; grid-template-columns: auto 1fr; padding: 6px 14px 4px; gap: 16px; }
+  .phone .A .act .totals { padding: 6px 20px 4px; }
+  .A .act .totals .num { font-size: 20px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  .A .act .totals .num small { display: block; font-size: 11.5px; font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-top: 2px; }
+  .A .act .trendwrap { padding: 4px 14px 2px; }
+  .phone .A .act .trendwrap { padding: 4px 20px 2px; }
+  .A .prow { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 5px 14px; align-items: baseline; cursor: pointer; }
+  .phone .A .prow { padding: 7px 20px; }
+  .A .prow:hover { background: var(--hover); }
+  .A .prow .pn { display: flex; align-items: center; gap: 6px; }
+  .A .prow .pn svg { width: 11px; height: 11px; }
+  .A .prow .t, .A .prow .c { color: var(--ink-2); font-size: 12px; }
+  .A .mrow { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 3px 14px 3px 31px; font-size: 12px; color: var(--ink-2); }
+  .phone .A .mrow { padding: 4px 20px 4px 37px; }
+  .A .mrow .note { grid-column: 1 / 4; color: var(--ink-3); font-size: 11.5px; }
+
+  /* ---------- Variant B: Cards ---------- */
+  .B .card { margin: 0 12px 10px; background: var(--paper-2); border-radius: var(--radius); box-shadow: 0 0 0 .5px var(--rule); overflow: hidden; }
+  .phone .B .card { margin: 0 16px 12px; border-radius: 14px; }
+  .B .card .chead { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; cursor: pointer; }
+  .B .card .chead .name { font-weight: 600; }
+  .B .card .chead .plan { color: var(--ink-2); font-size: 12px; }
+  .B .card .chead .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .B .hero { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px 0; }
+  .B .hero .n { font-size: 30px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+  .phone .B .hero .n { font-size: 36px; }
+  .B .hero .l { color: var(--ink-2); font-size: 12px; }
+  .B .hero .r { margin-left: auto; color: var(--ink-3); font-size: 12px; text-align: right; }
+  .B .hero-bar { margin: 8px 12px 0; }
+  .B .others { padding: 8px 12px 10px; display: grid; gap: 6px; }
+  .B .owin { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 12px; }
+  .B .owin .lbl { color: var(--ink-2); }
+  .B .owin .pct { font-weight: 500; text-align: right; }
+  .B .owin .bar { grid-column: 1 / 3; }
+  .B .owin .reset { grid-column: 1 / 3; color: var(--ink-3); font-size: 11.5px; }
+  .B .cfoot { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
+  .B .card .details { padding: 0 12px 10px; }
+  .B .act .totals { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 8px 12px 4px; }
+  .B .act .totals > div { display: flex; flex-direction: column; justify-content: flex-end; }
+  .B .act .totals .k { color: var(--ink-2); font-size: 12px; }
+  .B .act .totals .v { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  .B .act .totals .v small { font-size: 12px; font-weight: 400; color: var(--ink-2); letter-spacing: 0; }
+  .B .act .trendwrap { padding: 8px 12px 4px; }
+  .B .act .trend { height: 48px; }
+  .B .ppill { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); cursor: pointer; }
+  .B .ppill:hover { background: var(--hover); }
+  .B .ppill svg { width: 12px; height: 12px; }
+  .B .ppill .t { margin-left: auto; color: var(--ink-2); font-size: 12px; }
+  .B .ppill .c { color: var(--ink); font-size: 12px; min-width: 6em; text-align: right; }
+  .B .mrow { display: grid; grid-template-columns: 1fr auto auto; gap: 0 10px; padding: 4px 12px 4px 32px; font-size: 12px; color: var(--ink-2); }
+  .B .mrow .note { grid-column: 1 / 4; color: var(--ink-3); font-size: 11.5px; }
+
+  /* ---------- Variant C: Table ---------- */
+  .C table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+  .C th.c-account { width: 31%; } .C th.c-window { width: 21%; } .C th.c-rem { width: 30%; } .C th.c-reset { width: 18%; }
+  .phone .C th.c-account { width: 36%; } .phone .C th.c-window { width: 30%; } .phone .C th.c-rem { width: 34%; }
+  .C th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11.5px; padding: 6px 8px 4px; border-bottom: 1px solid var(--rule); }
+  .C th:first-child { padding-left: 14px; }
+  .C td { padding: 4px 8px; vertical-align: middle; border-bottom: 1px solid var(--rule); }
+  .C td:first-child { padding-left: 11px; border-left: 3px solid transparent; }
+  .C tr.first td { padding-top: 7px; }
+  .C tr.last td { padding-bottom: 7px; }
+  .C td.acct { font-weight: 600; cursor: pointer; overflow-wrap: anywhere; }
+  .C td.acct .chip { margin-top: 3px; }
+  .C td.acct .plan { display: block; font-weight: 400; color: var(--ink-2); font-size: 11.5px; }
+  .C td.win { color: var(--ink-2); white-space: nowrap; }
+  .C td.rem { width: 34%; }
+  .C td.rem .row { display: flex; align-items: center; gap: 8px; }
+  .C td.rem .bar { flex: 1; min-width: 40px; }
+  .C td.rem .pct { font-weight: 500; min-width: 3.4ch; text-align: right; }
+  .C td.reset { color: var(--ink-2); font-size: 12px; text-align: right; padding-right: 14px; }
+  .C td.win .under { display: none; }
+  .phone .C th.c-reset, .phone .C td.reset { display: none; }
+  .phone .C td.win .under { display: block; color: var(--ink-3); font-size: 11.5px; white-space: normal; }
+  .phone .C td.win { white-space: normal; }
+  .C tr.detail td { padding: 0 14px 10px 14px; }
+  .C tr.detail .details { padding: 4px 0 0; }
+  .C tr.foot td { padding: 2px 8px 8px 14px; }
+  .C .act table td { border-bottom: 1px solid var(--rule); }
+  .C .act tr.prow { cursor: pointer; }
+  .C .act tr.prow:hover td { background: var(--hover); }
+  .C .act tr.mrow td { color: var(--ink-2); font-size: 12px; padding-left: 28px; }
+  .C .act td.n, .C .act th.n { text-align: right; }
+  .C .act .trendwrap { padding: 8px 14px 4px; }
+  .C .act .totals { padding: 6px 14px 2px; display: flex; gap: 18px; align-items: baseline; }
+  .C .act .totals b { font-size: 16px; font-weight: 600; }
+  .C .act .totals span { color: var(--ink-2); font-size: 12px; }
+  .phone .C .section-title, .phone .C .act .totals, .phone .C .act .trendwrap { padding-left: 16px; padding-right: 16px; }
+  .phone .C th:first-child, .phone .C td:first-child { padding-left: 13px; }
+  .phone .C td.reset { padding-right: 16px; }
+
+  /* ---------- prototype chrome (not part of the design) ---------- */
+  #proto-controls {
+    position: fixed; top: 16px; right: 16px; width: 250px; background: #fffbe6; border: 2px solid #f0b400;
+    border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #1d1d1f; z-index: 40; box-shadow: 0 6px 20px rgba(0,0,0,.2);
+  }
+  #proto-controls h3 { margin: 0 0 6px; font-size: 12px; }
+  #proto-controls .grp { margin: 6px 0; }
+  #proto-controls .grp > span { display: block; color: #6e6e73; margin-bottom: 3px; }
+  #proto-controls .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+  #proto-controls .opts button { padding: 2px 8px; border-radius: 999px; border: 1px solid #d0c080; background: #fff; }
+  #proto-controls .opts button[aria-pressed="true"] { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+  #proto-controls .legend { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 4px; }
+  #proto-controls .legend div { height: 22px; border-radius: 4px; display: grid; grid-template-rows: 1fr 1fr; overflow: hidden; }
+  #proto-controls .legend i { display: block; }
+  #proto-controls .legend-names { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; font-size: 9.5px; color: #6e6e73; text-align: center; }
+  #proto-switcher {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+    background: #1d1d1f; color: #fff; padding: 8px 12px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 40; font-size: 13px;
+  }
+  #proto-switcher button { color: #fff; font-size: 16px; padding: 0 6px; }
+  #proto-switcher b { font-weight: 600; }
+  #proto-switcher span { color: #a1a1a6; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div class="tip" id="tip"></div>
+<aside id="proto-controls"></aside>
+<div id="proto-switcher"></div>
+
+<script>
+'use strict';
+// ---------- prototype state from URL ----------
+const params = new URLSearchParams(location.search);
+const DEFAULTS = { variant: 'B', appearance: 'light', bar: 'normal', state: 'healthy', palette: 'tuned', pin: 'tint', phone: '390', clip: 'all' };
+const S = Object.fromEntries(Object.entries(DEFAULTS).map(([k, v]) => [k, params.get(k) ?? v]));
+function setParam(k, v) { S[k] = v; const p = new URLSearchParams(S); history.replaceState(null, '', '?' + p); render(); }
+
+// UI interaction state (in memory only)
+const UI = { expanded: new Set((params.get('expand') ?? '').split(',').filter(Boolean)), range: 'today', openProviders: new Set(), overlay: null, credits: {}, acked: false };
+
+// ---------- palettes: six identity colors with light/dark pairs; color 1 is mono (black on light, white on dark) ----------
+const MONO = { light: '#1d1d1f', dark: '#f5f5f7' };
+const PALETTES = {
+  tuned: { name: 'Tuned pairs', names: ['Mono', 'Cobalt', 'Tangerine', 'Moss', 'Plum', 'Rose'],
+    light: [MONO.light, '#2456e6', '#d96d0b', '#1e8a4c', '#8b3fc9', '#cf2f5a'],
+    dark:  [MONO.dark, '#7d9bff', '#ffa24a', '#4fd08a', '#c58bf2', '#ff7e9e'] },
+  okabe: { name: 'Okabe-Ito', names: ['Mono', 'Blue', 'Vermil.', 'Green', 'Purple', 'Orange'],
+    light: [MONO.light, '#0072b2', '#d55e00', '#009e73', '#cc79a7', '#e69f00'],
+    dark:  [MONO.dark, '#0072b2', '#d55e00', '#009e73', '#cc79a7', '#e69f00'] },
+};
+function color(idx, mode) { const p = PALETTES[S.palette]; return p[mode][idx % 6]; }
+
+// ---------- providers (logos from models.dev, as OpenChamber uses; all currentColor) ----------
+const PROVIDERS = {
+  anthropic: { name: 'Anthropic', glyph: '<svg viewBox="0 0 40 40" fill="currentColor"><path d="M26.9568 9.88184H22.1265L30.7753 31.7848H35.4917L26.9568 9.88184ZM13.028 9.88184L4.4917 31.7848H9.32203L11.2305 27.1793H20.2166L22.0126 31.6724H26.8444L18.0832 9.88184H13.028ZM12.5783 23.1361L15.4987 15.3853L18.5315 23.1361H12.5783Z" fill="currentColor"/></svg>' },
+  openai:    { name: 'OpenAI',    glyph: '<svg viewBox="0 0 40 40" fill="currentColor"><path d="M32.8377 17.282C33.2127 16.25 33.3072 15.218 33.2127 14.1875C33.1197 13.1571 32.7447 12.1251 32.2752 11.1876C31.4322 9.78209 30.2127 8.6571 28.8072 8.0001C27.3072 7.34461 25.7127 7.15711 24.1197 7.53211C23.3698 6.78212 22.5253 6.12512 21.5878 5.65713C20.6503 5.18913 19.5253 5.00013 18.4948 5.00013C16.8851 4.99074 15.3125 5.48246 13.9948 6.40712C12.6824 7.34311 11.7449 8.6571 11.2754 10.1571C10.1504 10.4376 9.21289 10.9071 8.27539 11.4696C7.4324 12.1251 6.77541 12.9696 6.21291 13.8126C5.36992 15.2195 5.08792 16.8125 5.27542 18.407C5.46399 19.9968 6.11605 21.496 7.1504 22.718C6.79608 23.7086 6.66795 24.7659 6.77541 25.8124C6.86991 26.8444 7.2449 27.8749 7.7129 28.8124C8.55739 30.2194 9.77538 31.3444 11.1824 31.9999C12.6824 32.6569 14.2753 32.8444 15.8698 32.4694C16.6198 33.2194 17.4628 33.8749 18.4003 34.3444C19.3378 34.8139 20.4628 34.9999 21.4948 34.9999C23.1043 35.0097 24.6769 34.5185 25.9947 33.5944C27.3072 32.6569 28.2447 31.3444 28.7127 29.8444C29.7719 29.6432 30.7682 29.1934 31.6197 28.5319C32.4627 27.8749 33.2127 27.1249 33.6822 26.1874C34.5251 24.7819 34.8071 23.1875 34.6196 21.5945C34.4322 20 33.8697 18.5015 32.8377 17.282ZM21.5878 33.0304C20.0878 33.0304 18.9628 32.5609 17.9323 31.7179C17.9323 31.7179 18.0253 31.6234 18.1198 31.6234L24.1197 28.1554C24.2862 28.0803 24.4196 27.9469 24.4947 27.7804C24.5698 27.636 24.6021 27.4731 24.5877 27.3109V18.875L27.1197 20.375V27.3124C27.1455 28.0547 27.0215 28.7945 26.755 29.4878C26.4885 30.181 26.085 30.8134 25.5687 31.3473C25.0523 31.8811 24.4337 32.3054 23.7497 32.5949C23.0658 32.8843 22.3305 33.0314 21.5878 33.0304ZM9.49488 27.8749C8.83789 26.7499 8.55739 25.4374 8.83789 24.125C8.83789 24.125 8.93239 24.2195 9.02539 24.2195L15.0253 27.6874C15.1693 27.7638 15.3325 27.7966 15.4948 27.7819C15.6823 27.7819 15.8698 27.7819 15.9628 27.6874L23.2753 23.4695V26.3749L17.1823 29.9374C16.5506 30.3042 15.8527 30.5427 15.1287 30.6393C14.4046 30.7358 13.6686 30.6884 12.9629 30.4999C11.4629 30.1249 10.2449 29.1874 9.49488 27.8749ZM7.9004 14.8445C8.56239 13.7234 9.58826 12.8627 10.8074 12.4056V19.532C10.8074 19.718 10.8074 19.907 10.9004 20C10.9755 20.1665 11.1089 20.2998 11.2754 20.375L18.5878 24.5944L16.0573 26.0944L10.0574 22.625C9.41842 22.2639 8.85742 21.7797 8.40684 21.2004C7.95627 20.6211 7.62506 19.9582 7.4324 19.25C7.05741 17.8445 7.1504 16.157 7.9004 14.8445ZM28.6197 19.625L21.3073 15.407L23.8377 13.9071L29.8377 17.375C30.7752 17.9375 31.5252 18.6875 31.9947 19.625C32.4642 20.5625 32.7447 21.5945 32.6502 22.7195C32.5603 23.7755 32.1699 24.7837 31.5252 25.6249C30.8697 26.4694 30.0252 27.1249 28.9947 27.4999V20.375C28.9947 20.1875 28.9947 20 28.9002 19.907C28.9002 19.907 28.8072 19.718 28.6197 19.625ZM31.1502 15.875C31.1502 15.875 31.0572 15.782 30.9627 15.782L24.9627 12.3126C24.7752 12.2196 24.6822 12.2196 24.4947 12.2196C24.3072 12.2196 24.1197 12.2196 24.0252 12.3126L16.7128 16.532V13.6251L22.8073 10.0626C23.7448 9.50009 24.7752 9.31259 25.9002 9.31259C26.9322 9.31259 27.9627 9.68759 28.9002 10.3446C29.7447 11.0001 30.4947 11.8446 30.8697 12.7821C31.2447 13.7196 31.3377 14.8445 31.1502 15.875ZM15.4003 21.125L12.8699 19.625V12.5946C12.8699 11.5626 13.1503 10.4376 13.7128 9.59459C14.2753 8.6571 15.1198 8.0001 16.0573 7.53211C17.0127 7.05249 18.0956 6.88812 19.1503 7.06261C20.1823 7.15711 21.2128 7.62511 22.0573 8.2821C22.0573 8.2821 21.9628 8.3751 21.8698 8.3751L15.8698 11.8446C15.7033 11.9197 15.57 12.0531 15.4948 12.2196C15.4003 12.4071 15.4003 12.5001 15.4003 12.6876V21.125ZM16.7128 18.125L19.9948 16.25L23.2753 18.125V21.875L19.9948 23.75L16.7128 21.875V18.125Z" fill="currentColor"/></svg>' },
+  go:        { name: 'OpenCode Go', glyph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.40005 17.4H19.2001V21H4.80005V13.8H8.40005V17.4ZM15.6001 10.2V13.8H8.40005V10.2H15.6001ZM19.2001 10.2H15.6001V6.6H4.80005V3H19.2001V10.2Z" fill="currentColor"/></svg>' },
+  xai:       { name: 'xAI',       glyph: '<svg viewBox="0 0 40 40" fill="currentColor"><path d="M12.4579 15.6036L26.1529 35H20.0656L6.37059 15.6036H12.4579ZM12.4524 26.3764L15.4974 30.6909L12.4551 35H6.36377L12.4524 26.3764ZM33.6365 7.15727V35H28.647V14.2236L33.6365 7.15727ZM33.6365 5L20.0656 24.2205L17.0206 19.9073L27.5451 5H33.6365Z" fill="currentColor"/></svg>' },
+};
+const TALLY_GLYPH = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5v9M5.5 2.5v9M8.5 2.5v9M1 11.5 12.5 2.5"/></svg>';
+const WARN = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-label="warning"><path d="M6 1.5 11 10.5H1z"/><path d="M6 5v2.6" stroke-linecap="round"/><circle cx="6" cy="9" r=".55" fill="currentColor" stroke="none"/></svg>';
+const CHEV = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5 7.5 6 4 9.5"/></svg>';
+const INFO = '<svg viewBox="0 0 12 12" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="6" cy="6" r="4.8"/><path d="M6 5.4v3.2" stroke-linecap="round"/><circle cx="6" cy="3.6" r=".6" fill="currentColor" stroke="none"/></svg>';
+
+// ---------- synthetic data ----------
+const NOW = Date.now();
+const H = 3600e3, D = 86400e3, M = 60e3;
+const TZ = 'America/New_York';
+
+function buildAccounts() {
+  const degraded = S.state === 'degraded';
+  const list = [
+    { id: 'an-personal', provider: 'anthropic', name: 'Personal', plan: 'Max 20x', idx: 0, pinned: true, observed: NOW - 95e3,
+      windows: [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: 62, resetsAt: NOW + 2 * H + 14 * M },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 38, resetsAt: NOW + 3 * D + 5 * H },
+        { label: 'Fable', short: 'Fable', duration: 7 * D, remaining: 71, resetsAt: NOW + 3 * D + 5 * H, note: 'Fable can use up to half of the weekly allowance' },
+      ],
+      spend: { label: 'Extra usage', used: 12.40, cap: null, period: 'this month' }, extras: [] },
+    { id: 'an-work', provider: 'anthropic', name: 'Work', plan: 'Max 5x', idx: 1, pinned: true,
+      observed: degraded ? NOW - 14 * M : NOW - 110e3, stale: degraded, error: degraded ? 'HTTP 529 from the usage endpoint at 11:06 AM; retrying with backoff' : null,
+      windows: [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: 100, resetsAt: null, notStarted: true },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 12, resetsAt: NOW + 22 * H },
+      ],
+      spend: { label: 'Extra usage', used: 4.20, cap: 25.00, period: 'this month' }, extras: [] },
+    { id: 'oa-personal', provider: 'openai', name: 'Personal', plan: 'Pro 20x', idx: 0, pinned: true, observed: NOW - 70e3,
+      windows: [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: 45, resetsAt: NOW + 1 * H + 3 * M },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 80, resetsAt: NOW + 5 * D + 2 * H },
+      ],
+      balance: '12 credits ($0.48)',
+      credits: { available: 2, applicable: 0, items: [
+        { id: 'c1', expiresAt: NOW + 3 * D + 2 * H, title: 'Full reset' },
+        { id: 'c2', expiresAt: NOW + 26 * D, title: 'Full reset' } ] },
+      extras: [['Credits balance', '12 credits, about $0.48 at $0.04 each']] },
+    { id: 'oa-work', provider: 'openai', name: 'Work', plan: 'Business Premium', idx: 1, pinned: true, observed: NOW - 60e3,
+      windows: [
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 0, resetsAt: degraded ? NOW - 9 * M : NOW + 1 * D + 6 * H },
+      ],
+      balance: '0 credits',
+      credits: { available: 0, applicable: 0, items: [] },
+      unknownOutcome: degraded && !UI.acked ? { at: NOW - 41 * M, creditId: 'c9', note: 'A redemption request sent at 10:39 AM got no answer. Tally will not resend it.' } : null,
+      extras: [['Credits balance', '0 credits']] },
+    { id: 'go-main', provider: 'go', name: 'Go', plan: 'Go', idx: 0, pinned: true, observed: NOW - 50e3,
+      windows: [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: 88, resetsAt: NOW + 4 * H + 40 * M },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 54, resetsAt: NOW + 6 * D + 1 * H },
+        { label: 'Monthly', short: '30d', duration: 30 * D, remaining: 67, resetsAt: NOW + 19 * D },
+      ], extras: [] },
+    { id: 'go-team', provider: 'go', name: 'Team', plan: degraded ? null : 'Go', idx: 1, pinned: true,
+      observed: degraded ? null : NOW - 55e3, stale: degraded, error: degraded ? 'No successful reading yet. Last attempt 11:18 AM: 401 Unauthorized' : null,
+      windows: degraded ? [] : [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: 97, resetsAt: NOW + 4 * H + 58 * M },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 91, resetsAt: NOW + 6 * D + 1 * H },
+        { label: 'Monthly', short: '30d', duration: 30 * D, remaining: 93, resetsAt: NOW + 19 * D },
+      ], extras: [] },
+    { id: 'xai-grok', provider: 'xai', name: 'Grok', plan: 'SuperGrok', idx: 0, pinned: true, observed: NOW - 80e3,
+      windows: [
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: 23, resetsAt: NOW + 2 * D + 11 * H },
+        ...(degraded ? [{ label: 'Billing period', short: 'billing', duration: null, remaining: 77, resetsAt: NOW + 12 * D }] : []),
+      ],
+      spend: { label: 'Pay as you go', used: 3.12, cap: 20.00, period: 'this period' }, extras: [] },
+  ];
+  if (S.bar === 'crowded') {
+    'abcdefg'.split('').forEach((ch, i) => list.splice(2 + i, 0, {
+      id: 'an-org-' + ch, provider: 'anthropic', name: 'Org ' + ch.toUpperCase(), plan: 'Max 5x', idx: 2 + i, pinned: true, observed: NOW - (40 + i * 7) * 1e3,
+      windows: [
+        { label: '5-hour', short: '5h', duration: 5 * H, remaining: [9, 84, 51, 100, 33, 68, 5][i], resetsAt: NOW + (i + 1) * 30 * M },
+        { label: 'Weekly', short: '7d', duration: 7 * D, remaining: [40, 77, 60, 95, 21, 88, 12][i], resetsAt: NOW + (i + 1) * D },
+      ], extras: [] }));
+  }
+  if (S.bar === 'nopins') list.forEach(a => a.pinned = false);
+  if (S.bar === 'three') list.forEach(a => a.pinned = ['an-personal', 'oa-personal', 'go-main'].includes(a.id));
+  return list;
+}
+
+// Pin value: lowest remaining among windows tied for the shortest known duration.
+function pinWindow(a) {
+  if (!a.observed) return null;
+  const known = a.windows.filter(w => w.duration != null);
+  if (known.length === 0) return null;
+  const min = Math.min(...known.map(w => w.duration));
+  return known.filter(w => w.duration === min).sort((x, y) => x.remaining - y.remaining)[0];
+}
+// Pin lines: single-window accounts show one percentage; multi-window accounts stack the
+// shortest window over the next longer one (5-hour over weekly), as OpenUsage does.
+function pinLines(a) {
+  const top = pinWindow(a); if (!top) return [];
+  const longer = a.windows.filter(w => w.duration != null && w.duration > top.duration && !w.note).sort((x, y) => x.duration - y.duration);
+  return longer.length ? [top, longer[0]] : [top];
+}
+
+const ACTIVITY = (() => {
+  const degraded = S.state === 'degraded';
+  const trend = [310, 420, 0, 0, 980, 1240, 660, 720, 90, 0, 1310, 1520, 400, 380, 950, 1100, 0, 40, 870, 1290, 1400, 610, 720, 0, 0, 1020, 1180, 640, 1560, 1243];
+  const mk = (tokens, low, high, providers) => ({ tokens, low, high, providers });
+  const goModel = { m: 'kimi-k2.5', tokens: 130e3, low: .18, high: .18, status: 'priced', note: 'Recorded $0; pricing provenance unknown' };
+  return {
+    trend,
+    today: mk(1243e3, 3.10, 3.42, [
+      { p: 'anthropic', tokens: 812e3, low: 2.21, high: 2.53, models: [
+        { m: 'claude-fable-5-1', tokens: 640e3, low: 1.85, high: 2.17, status: 'range', note: 'Cache-write duration unknown; 5-minute and 1-hour prices bound the range' },
+        { m: 'claude-sonnet-4-5', tokens: 172e3, low: .36, high: .36, status: 'priced' } ] },
+      { p: 'openai', tokens: degraded ? 342e3 : 301e3, low: .71, high: .71, models: [
+        { m: 'gpt-6-astra', tokens: 301e3, low: .71, high: .71, status: 'priced' },
+        ...(degraded ? [{ m: 'gpt-6-astra-preview-0907', tokens: 41e3, status: 'unpriced', note: 'No exact provider/model match in bundle 2026-09-07-r1' }] : []) ] },
+      { p: 'go', tokens: 130e3, low: .18, high: .18, models: [goModel], note: 'OpenCode Go provider activity; historical routing and prepaid fallback qualify these records' },
+      { p: 'xai', tokens: 0, status: 'none', models: [] } ]),
+    yesterday: mk(2140e3, 5.02, 5.61, [
+      { p: 'anthropic', tokens: 1400e3, low: 3.61, high: 4.20, models: [
+        { m: 'claude-fable-5-1', tokens: 1210e3, low: 3.20, high: 3.79, status: 'range', note: 'Cache-write duration unknown; 5-minute and 1-hour prices bound the range' },
+        { m: 'claude-sonnet-4-5', tokens: 190e3, low: .41, high: .41, status: 'priced' } ] },
+      { p: 'openai', tokens: 520e3, low: 1.10, high: 1.10, models: [{ m: 'gpt-6-astra', tokens: 520e3, low: 1.10, high: 1.10, status: 'priced' }] },
+      { p: 'go', tokens: 220e3, low: .31, high: .31, models: [{ ...goModel, tokens: 220e3, low: .31, high: .31 }], note: 'OpenCode Go provider activity; historical routing and prepaid fallback qualify these records' },
+      { p: 'xai', tokens: 0, status: 'none', models: [] } ]),
+    last30: mk(21.7e6, 51.20, 57.90, [
+      { p: 'anthropic', tokens: 14.1e6, low: 36.4, high: 43.1, models: [
+        { m: 'claude-fable-5-1', tokens: 11.9e6, low: 31.5, high: 38.2, status: 'range', note: 'Cache-write duration unknown; 5-minute and 1-hour prices bound the range' },
+        { m: 'claude-sonnet-4-5', tokens: 2.2e6, low: 4.9, high: 4.9, status: 'priced' } ] },
+      { p: 'openai', tokens: 5.3e6, low: 11.2, high: 11.2, models: [{ m: 'gpt-6-astra', tokens: 5.3e6, low: 11.2, high: 11.2, status: 'priced' }] },
+      { p: 'go', tokens: 2.1e6, low: 3.1, high: 3.1, models: [{ ...goModel, tokens: 2.1e6, low: 3.1, high: 3.1 }], note: 'OpenCode Go provider activity; historical routing and prepaid fallback qualify these records' },
+      { p: 'xai', tokens: 200e3, low: .5, high: .5, models: [{ m: 'grok-4', tokens: 200e3, low: .5, high: .5, status: 'priced' }] } ]),
+    stale: degraded ? { age: '6m', reason: 'Last scan failed at 11:14 AM: database locked. Showing the 11:12 AM reading.' } : null,
+    scanned: NOW - (degraded ? 8 * M : 40e3),
+    revision: '2026-09-07-r1',
+  };
+})();
+
+// ---------- formatting ----------
+const fmtAbs = t => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: TZ }).format(t);
+const fmtTime = t => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ }).format(t);
+function rel(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d > 0) return `${d}d ${h}h`; if (h > 0) return `${h}h ${m}m`; return `${Math.max(m, 1)}m`;
+}
+function resetText(w) {
+  if (w.notStarted) return 'Not started';
+  if (w.resetsAt == null) return 'Reset time unknown';
+  const dt = w.resetsAt - NOW;
+  if (dt < 0) return 'Reset time passed; awaiting update';
+  if (dt >= 7 * D) return 'resets ' + fmtAbs(w.resetsAt);
+  return 'resets in ' + rel(dt);
+}
+function durText(w) { return w.duration == null ? 'unknown duration' : w.duration >= D ? `${Math.round(w.duration / D)}-day window` : `${Math.round(w.duration / H)}-hour window`; }
+const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(n >= 10e6 ? 1 : 2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+const fmtUsd = n => '$' + n.toFixed(2);
+const fmtRange = (lo, hi) => lo === hi ? fmtUsd(lo) : `${fmtUsd(lo)}\u2013${hi.toFixed(2)}`;
+function pacing(w) {
+  if (w.duration == null) return { ok: false, reason: 'Window duration unknown' };
+  if (w.resetsAt == null || w.resetsAt < NOW) return { ok: false, reason: 'Reset time missing or passed' };
+  const used = 100 - w.remaining; if (used <= 0) return { ok: false, reason: 'No usage in this window yet' };
+  const start = w.resetsAt - w.duration, elapsed = NOW - start;
+  if (elapsed < Math.max(60e3, w.duration * .01)) return { ok: false, reason: 'Not enough of the window has elapsed' };
+  const projected = used / elapsed * w.duration;
+  const out = { ok: true, projected: Math.round(projected), spare: Math.round(100 - projected) };
+  if (projected > 100) out.runOut = start + elapsed * (100 / used);
+  return out;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- shared renderers ----------
+// Account identity in the apps: the provider logo tinted with the account color, matching its pin.
+function swatch(a, mode) { return `<span class="acct-logo" style="color:${color(a.idx, mode)}" title="${PROVIDERS[a.provider].name}">${PROVIDERS[a.provider].glyph}</span>`; }
+function warnmark(text) { return `<span class="warnmark" title="${esc(text)}">${WARN}<span class="muted" style="font-size:11.5px">${esc(text)}</span></span>`; }
+function accountBadges(a) {
+  const out = [];
+  if (a.stale) out.push(a.observed ? warnmark(`Stale ${rel(NOW - a.observed)}`) : warnmark('No reading'));
+  if (a.unknownOutcome) out.push(`<button class="chip warn" data-act="unknown" data-id="${a.id}">${WARN} Reset outcome unknown</button>`);
+  return out.join('');
+}
+function footChips(a) {
+  const out = [];
+  if (a.credits) out.push(`<button class="chip action" data-act="credits" data-id="${a.id}" title="Reset credits for ${esc(a.name)}">${a.credits.available} reset ${a.credits.available === 1 ? 'credit' : 'credits'}</button>`);
+  return out.join('');
+}
+// Spend and balance rows shown without expanding: extra-usage caps get a remaining bar; balances and "off" are one line.
+function spendRows(a) {
+  const rows = [];
+  if (a.spend) {
+    const sp = a.spend;
+    if (sp.off) rows.push(`<div class="owin"><span class="lbl">${esc(sp.label)}</span><span class="pct muted">Off</span></div>`);
+    // The provider only sometimes reports a limit (the spike saw monthly_limit: null); without one, show used alone, no fraction or bar.
+    else if (sp.cap == null) rows.push(`<div class="owin"><span class="lbl">${esc(sp.label)}</span><span class="pct">${fmtUsd(sp.used)} spent ${esc(sp.period)}</span></div>`);
+    else { const left = Math.max(0, sp.cap - sp.used), pct = left / sp.cap * 100;
+      rows.push(`<div class="owin"><span class="lbl">${esc(sp.label)}</span><span class="pct">${fmtUsd(left)} of ${fmtUsd(sp.cap)} left</span><div class="bar"><i style="width:${pct}%"></i></div><span class="reset">${fmtUsd(sp.used)} spent ${esc(sp.period)}</span></div>`); }
+  }
+  if (a.balance) rows.push(`<div class="owin"><span class="lbl">Credits</span><span class="pct">${esc(a.balance)}</span></div>`);
+  return rows.join('');
+}
+function detailsBlock(a) {
+  const rows = [];
+  rows.push(['Observed', a.observed ? `${fmtTime(a.observed)}, ${rel(NOW - a.observed)} ago` : 'Never']);
+  if (a.error) rows.push(['Error', a.error]);
+  a.extras.forEach(([k, v]) => rows.push([k, v]));
+  if (a.spend) rows.push([a.spend.label, a.spend.off ? 'Off' : a.spend.cap == null ? `${fmtUsd(a.spend.used)} used ${a.spend.period}; no limit reported` : `${fmtUsd(a.spend.used)} of a ${fmtUsd(a.spend.cap)} limit used ${a.spend.period}`]);
+  if (a.credits) rows.push(['Reset credits', `${a.credits.available} available; provider reports ${a.credits.applicable} applicable now`]);
+  rows.push(['Times shown in', TZ]);
+  let html = `<div class="details"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  a.windows.forEach(w => {
+    const p = pacing(w);
+    html += `<div class="sub">${esc(w.label)}, ${durText(w)}</div><dl>
+      ${w.note ? `<dt>Scope</dt><dd>${esc(w.note)}</dd>` : ''}
+      <dt>Used</dt><dd>${100 - w.remaining}%</dd>
+      <dt>Resets</dt><dd>${w.resetsAt ? esc(fmtAbs(w.resetsAt)) : 'Unknown'}${w.resetsAt && w.resetsAt < NOW ? '; passed, awaiting update' : ''}</dd>
+      ${p.ok ? `<dt>Projected at reset</dt><dd>${p.projected}% used, ${p.spare >= 0 ? p.spare + '% spare' : 'over by ' + (-p.spare) + '%'}</dd>${p.runOut ? `<dt>Runs out</dt><dd>${esc(fmtAbs(p.runOut))}</dd>` : ''}` : `<dt>Pacing</dt><dd>${esc(p.reason)}</dd>`}
+    </dl>`;
+  });
+  return html + '</div>';
+}
+function trendBlock() {
+  const t = ACTIVITY.trend, max = Math.max(...t);
+  const inRange = i => UI.range === 'today' ? i === 29 : UI.range === 'yesterday' ? i === 28 : true;
+  return `<div class="trendwrap"><div class="trend" role="img" aria-label="Daily token trend, last 30 days">${t.map((v, i) => `<i class="${inRange(i) ? 'in' : ''}" style="height:${Math.max(3, v / max * 100)}%" title="${fmtTok(v * 1000)} tokens"></i>`).join('')}</div>
+  <div class="trend-axis"><span>Aug 9</span><span>Aug 24</span><span>Today</span></div></div>`;
+}
+function activityHeader(title = 'Recorded OpenCode activity') {
+  const stale = ACTIVITY.stale;
+  return `<div class="section-title" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;row-gap:6px">${title}
+    <button class="textbtn" data-act="info" title="About this data" style="display:inline-flex;text-decoration:none;color:var(--ink-2)">${INFO}</button>
+    <span style="margin-left:auto" class="seg" role="group" aria-label="Range">
+      ${[['today', 'Today'], ['yesterday', 'Yesterday'], ['last30', '30 days']].map(([k, l]) => `<button data-act="range" data-range="${k}" aria-pressed="${UI.range === k}">${l}</button>`).join('')}</span></div>
+  <div class="faint" style="padding:0 14px;font-size:11.5px" data-pad>Partial history from this Mac's OpenCode records, ${TZ}${stale ? `. <span class="warnmark" style="color:var(--ink-2)">${WARN} Stale ${stale.age}</span>` : `. Scanned ${fmtTime(ACTIVITY.scanned)}`}</div>`;
+}
+function activityData() { return ACTIVITY[UI.range]; }
+function pricedStatus(d) {
+  const unpriced = d.providers.some(p => p.models.some(m => m.status === 'unpriced'));
+  const ranged = d.providers.some(p => p.models.some(m => m.status === 'range'));
+  return { unpriced, ranged, label: unpriced ? 'Partially priced' : ranged ? 'Estimate range' : 'Estimate' };
+}
+function modelRows(p, cls = 'mrow') {
+  return p.models.map(m => `<div class="${cls}"><span>${esc(m.m)}</span><span>${fmtTok(m.tokens)}</span><span>${m.status === 'unpriced' ? 'Unpriced' : fmtRange(m.low, m.high)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</div>`).join('')
+    + (p.note ? `<div class="${cls}"><span class="note">${esc(p.note)}</span></div>` : '');
+}
+function providerCost(p) { return p.status === 'none' ? 'No recorded activity' : p.models.some(m => m.status === 'unpriced') ? fmtRange(p.low, p.high) + ' partial' : fmtRange(p.low, p.high); }
+
+// ---------- overlays ----------
+function overlayHTML(accounts) {
+  const o = UI.overlay; if (!o) return '';
+  if (o.type === 'info') {
+    return `<div class="overlay"><div class="ohdr"><button class="textbtn" data-act="close">Back</button><h2>About recorded activity</h2></div><div class="obody">
+      <p>Tally reads the OpenCode V2 assistant records kept on this Mac. Deleted sessions, forks, and internal requests OpenCode does not record are missing, so totals are a partial history, never a complete one.</p>
+      <p>Records cannot be tied to an individual account. Totals are grouped by provider only and are not repeated under account cards.</p>
+      <p>Records labeled <code>opencode-go</code> are shown as OpenCode Go provider activity. Older records may have routed differently, and prepaid fallback may have applied. Zen records are excluded.</p>
+      <p>Costs are API-equivalent token estimates at the prices in bundle ${ACTIVITY.revision}, dated Sep 7, 2026. They are not subscription charges, invoices, or quota consumption. A range means verified alternative prices bound the matched activity. "Partially priced" means some models or tokens had no exact price match and are excluded from the total.</p>
+      <p>Where OpenCode recorded a cost of $0 without saying why, the model row says "Recorded $0; pricing provenance unknown".</p>
+      <p>Ranges use ${TZ}. "30 days" means today plus the preceding 29 local calendar days.</p></div></div>`;
+  }
+  if (o.type === 'credits') {
+    const a = accounts.find(x => x.id === o.id), c = UI.credits[a.id] ?? (UI.credits[a.id] = {});
+    const items = [...a.credits.items].sort((x, y) => x.expiresAt - y.expiresAt);
+    return `<div class="overlay"><div class="ohdr"><button class="textbtn" data-act="close">Back</button><h2>Reset credits, ${esc(a.name)} (${PROVIDERS[a.provider].name})</h2></div><div class="obody">
+      <p>${a.credits.available} available. Redeeming consumes one credit; the provider decides which windows reset. Provider reports ${a.credits.applicable} applicable right now.</p>
+      ${items.length === 0 ? '<p>No credits to show.</p>' : items.map(it => {
+        const mine = c.confirming === it.id, pend = c.pending === it.id, done = c.outcome && c.outcome.id === it.id;
+        return `<div class="credit"><div class="when"><b>${esc(it.title)}, expires in ${rel(it.expiresAt - NOW)}</b><span>${esc(fmtAbs(it.expiresAt))} ${TZ}</span></div>
+          <button class="btn" data-act="use" data-id="${a.id}" data-credit="${it.id}" ${c.pending || c.confirming || c.outcome ? 'disabled' : ''}>${pend ? 'Redeeming…' : done ? 'Used' : 'Use'}</button></div>
+          ${mine ? `<div class="confirm"><p>Use this credit on <b>${esc(a.name)}</b>? This consumes one of ${a.credits.available} credits and cannot be undone.</p><div class="row"><button class="btn" data-act="cancel" data-id="${a.id}">Cancel</button><button class="btn primary" data-act="confirm" data-id="${a.id}" data-credit="${it.id}">Use credit</button></div></div>` : ''}`;
+      }).join('')}
+      ${c.outcome ? `<div class="outcome ${c.outcome.kind === 'unknown' ? 'warn' : ''}">${c.outcome.kind === 'unknown' ? WARN + ' ' : ''}${esc(c.outcome.text)}${c.outcome.kind === 'unknown' ? `<div class="row"><button class="btn" data-act="ack" data-id="${a.id}">Acknowledge</button></div>` : ''}</div>` : ''}
+    </div></div>`;
+  }
+  if (o.type === 'unknown') {
+    const a = accounts.find(x => x.id === o.id);
+    return `<div class="overlay"><div class="ohdr"><button class="textbtn" data-act="close">Back</button><h2>Reset outcome unknown, ${esc(a.name)}</h2></div><div class="obody">
+      <p>${esc(a.unknownOutcome.note)}</p><p>Check this account's remaining allowance and credit count before redeeming again. Acknowledging clears this notice; it does not retry.</p>
+      <div class="outcome warn"><div class="row"><button class="btn primary" data-act="ackAccount" data-id="${a.id}">Acknowledge</button></div></div></div></div>`;
+  }
+  return '';
+}
+
+// ---------- Variant A: Ledger ----------
+function A_account(a, mode) {
+  const exp = UI.expanded.has(a.id);
+  const wins = a.windows.length ? a.windows.map(w => `<div class="win"><span class="lbl">${esc(w.label)}</span><div class="bar ${w.duration == null ? 'unknown' : ''}"><i style="width:${w.remaining}%"></i></div><span class="pct">${w.remaining}%</span><span class="reset">${esc(resetText(w))}${w.duration == null ? ', duration unknown' : ''}</span></div>`).join('')
+    : `<div class="win"><span class="lbl">Windows</span><div class="bar unknown"></div><span class="pct muted">?</span><span class="reset">Unavailable</span></div>`;
+  return `<div class="acct"><div class="spine" style="background:${color(a.idx, mode)}"></div><div>
+    <div class="top" data-act="toggle" data-id="${a.id}" role="button" tabindex="0" aria-expanded="${exp}"><span class="name">${esc(a.name)}</span><span class="plan">${a.plan ? esc(a.plan) : 'Plan unknown'}</span><span class="right">${accountBadges(a)}<span class="faint" style="transform:rotate(${exp ? 90 : 0}deg);display:inline-flex">${CHEV}</span></span></div>
+    ${wins}
+    <div class="foot">${footChips(a)}</div>
+    ${exp ? detailsBlock(a) : ''}</div></div>`;
+}
+function A_activity() {
+  const d = activityData(), st = pricedStatus(d);
+  return `<div class="act">${activityHeader()}
+    <div class="totals"><span class="num">${fmtTok(d.tokens)}<small>tokens</small></span><span class="num">${fmtRange(d.low, d.high)}<small>${st.label}, API-equivalent</small></span></div>
+    ${trendBlock()}
+    ${d.providers.map(p => `<div class="prow" data-act="prov" data-p="${p.p}"><span class="pn">${PROVIDERS[p.p].glyph}${PROVIDERS[p.p].name}</span><span class="t">${p.status === 'none' ? '' : fmtTok(p.tokens)}</span><span class="c">${providerCost(p)}</span></div>${UI.openProviders.has(p.p) ? modelRows(p) : ''}`).join('')}
+    <div class="faint" style="padding:6px 14px 12px;font-size:11.5px" data-pad>Prices from bundle ${ACTIVITY.revision}. Recorded OpenCode cost is in each model's details.</div></div>`;
+}
+// Pinned first in saved order, then other accounts grouped by provider and sorted by OpenCode name.
+function groupedAccounts(accounts, mode, renderAccount) {
+  const pinned = accounts.filter(a => a.pinned), others = accounts.filter(a => !a.pinned);
+  let html = '';
+  if (pinned.length) html += `<div class="section-title">Pinned</div>` + pinned.map(a => renderAccount(a, mode)).join('');
+  if (others.length) {
+    html += `<div class="section-title">${pinned.length ? 'Other accounts' : 'Accounts'}</div>`;
+    Object.keys(PROVIDERS).forEach(p => { const g = others.filter(a => a.provider === p).sort((x, y) => x.name.localeCompare(y.name)); if (g.length) html += `<div class="provider-head">${PROVIDERS[p].glyph}${PROVIDERS[p].name}</div>` + g.map(a => renderAccount(a, mode)).join(''); });
+  }
+  return html;
+}
+function A_accounts(accounts, mode) { return groupedAccounts(accounts, mode, A_account); }
+
+// ---------- Variant B: Cards ----------
+function B_account(a, mode) {
+  const exp = UI.expanded.has(a.id), pw = pinWindow(a);
+  const rest = a.windows.filter(w => w !== pw);
+  return `<div class="card">
+    <div class="chead" data-act="toggle" data-id="${a.id}" role="button" tabindex="0" aria-expanded="${exp}">${swatch(a, mode)}<span class="name">${esc(a.name)}</span><span class="plan">${a.plan ? esc(a.plan) : 'Plan unknown'}</span><span class="right">${accountBadges(a)}<span class="faint" style="transform:rotate(${exp ? 90 : 0}deg);display:inline-flex">${CHEV}</span></span></div>
+    ${pw ? `<div class="hero"><span class="n">${pw.remaining}%</span><span class="l">left of ${esc(pw.label.toLowerCase())}</span><span class="r">${esc(resetText(pw))}</span></div><div class="bar hero-bar"><i style="width:${pw.remaining}%"></i></div>`
+         : `<div class="hero"><span class="n muted">?</span><span class="l">no reading yet</span><span class="r">${a.error ? 'see details' : ''}</span></div><div class="bar hero-bar unknown"></div>`}
+    ${(() => { const rows = rest.map(w => `<div class="owin"><span class="lbl">${esc(w.label)}${w.duration == null ? ', duration unknown' : ''}</span><span class="pct">${w.remaining}%</span><div class="bar ${w.duration == null ? 'unknown' : ''}"><i style="width:${w.remaining}%"></i></div><span class="reset">${esc(resetText(w))}</span></div>`).join('') + spendRows(a);
+       return rows ? `<div class="others">${rows}</div>` : '<div style="height:8px"></div>'; })()}
+    <div class="cfoot">${footChips(a)}</div>
+    ${exp ? detailsBlock(a) : ''}</div>`;
+}
+function B_activity() {
+  const d = activityData(), st = pricedStatus(d);
+  return `<div class="act card" style="margin-top:4px">${activityHeader()}
+    <div class="totals"><div><div class="k">Tokens</div><div class="v">${fmtTok(d.tokens)}</div></div><div><div class="k">${st.label}, API-equivalent</div><div class="v">${fmtRange(d.low, d.high)}</div></div></div>
+    ${trendBlock()}
+    ${d.providers.map(p => `<div class="ppill" data-act="prov" data-p="${p.p}">${PROVIDERS[p.p].glyph}<span>${PROVIDERS[p.p].name}</span><span class="t">${p.status === 'none' ? '' : fmtTok(p.tokens)}</span><span class="c">${providerCost(p)}</span></div>${UI.openProviders.has(p.p) ? modelRows(p) : ''}`).join('')}
+    <div class="faint" style="padding:8px 12px 10px;font-size:11.5px;border-top:1px solid var(--rule)">Prices from bundle ${ACTIVITY.revision}.</div></div>`;
+}
+function B_accounts(accounts, mode) { return groupedAccounts(accounts, mode, B_account); }
+
+// ---------- Variant C: Table ----------
+function C_rows(a, mode) {
+  const exp = UI.expanded.has(a.id), n = Math.max(a.windows.length, 1);
+  const wins = a.windows.length ? a.windows : [{ label: 'Windows', remaining: null, duration: null, resetsAt: null, unavailable: true }];
+  const c = color(a.idx, mode);
+  let html = wins.map((w, i) => `<tr class="${i === 0 ? 'first' : ''} ${i === n - 1 && !exp ? '' : ''}">
+    ${i === 0 ? `<td class="acct" rowspan="${n}" style="border-left-color:${c}" data-act="toggle" data-id="${a.id}" role="button" tabindex="0" aria-expanded="${exp}">${esc(a.name)} ${accountBadges(a)}<span class="plan">${a.plan ? esc(a.plan) : 'Plan unknown'}</span></td>` : ''}
+    <td class="win">${esc(w.label)}${w.duration == null && !w.unavailable ? '<br><span class="faint" style="font-size:11px">duration unknown</span>' : ''}<span class="under">${w.unavailable ? 'Unavailable' : esc(resetText(w))}</span></td>
+    <td class="rem"><div class="row"><div class="bar ${w.duration == null ? 'unknown' : ''}"><i style="width:${w.remaining ?? 0}%"></i></div><span class="pct ${w.remaining == null ? 'muted' : ''}">${w.remaining == null ? '?' : w.remaining + '%'}</span></div></td>
+    <td class="reset">${w.unavailable ? 'Unavailable' : esc(resetText(w)).replace('resets in ', '').replace('resets ', '')}</td></tr>`).join('');
+  const chips = footChips(a);
+  if (chips) html += `<tr class="foot"><td style="border-left-color:${c};border-bottom:${exp ? 0 : ''}" colspan="4"><div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div></td></tr>`;
+  if (exp) html += `<tr class="detail"><td colspan="4" style="border-left-color:${c}">${detailsBlock(a)}</td></tr>`;
+  return html;
+}
+function C_table(list, mode, caption) {
+  return `${caption ? `<div class="section-title">${caption}</div>` : ''}<table><thead><tr><th class="c-account">Account</th><th class="c-window">Window</th><th class="c-rem">Remaining</th><th class="c-reset" style="text-align:right;padding-right:14px">Resets</th></tr></thead><tbody>${list}</tbody></table>`;
+}
+function C_activity() {
+  const d = activityData(), st = pricedStatus(d);
+  return `<div class="act">${activityHeader()}
+    <div class="totals"><b>${fmtTok(d.tokens)}</b><span>tokens</span><b>${fmtRange(d.low, d.high)}</b><span>${st.label}, API-equivalent</span></div>
+    ${trendBlock()}
+    <table><thead><tr><th>Provider</th><th class="n">Tokens</th><th class="n">Estimate</th><th class="n" style="padding-right:14px">Priced</th></tr></thead><tbody>
+    ${d.providers.map(p => `<tr class="prow" data-act="prov" data-p="${p.p}"><td>${PROVIDERS[p.p].name}</td><td class="n">${p.status === 'none' ? '' : fmtTok(p.tokens)}</td><td class="n">${p.status === 'none' ? '<span class="muted">No recorded activity</span>' : fmtRange(p.low, p.high)}</td><td class="n" style="padding-right:14px">${p.status === 'none' ? '' : p.models.some(m => m.status === 'unpriced') ? 'Partial' : p.models.some(m => m.status === 'range') ? 'Range' : 'Full'}</td></tr>
+      ${UI.openProviders.has(p.p) ? p.models.map(m => `<tr class="mrow"><td>${esc(m.m)}${m.note ? `<br><span class="faint" style="font-size:11px">${esc(m.note)}</span>` : ''}</td><td class="n">${fmtTok(m.tokens)}</td><td class="n">${m.status === 'unpriced' ? 'Unpriced' : fmtRange(m.low, m.high)}</td><td class="n" style="padding-right:14px">${m.status === 'unpriced' ? 'No match' : m.status === 'range' ? 'Range' : 'Yes'}</td></tr>`).join('') + (p.note ? `<tr class="mrow"><td colspan="4"><span class="faint" style="font-size:11px">${esc(p.note)}</span></td></tr>` : '') : ''}`).join('')}
+    </tbody></table>
+    <div class="faint" style="padding:6px 14px 12px;font-size:11.5px" data-pad>Prices from bundle ${ACTIVITY.revision}.</div></div>`;
+}
+function C_accounts(accounts, mode) {
+  const pinned = accounts.filter(a => a.pinned), others = accounts.filter(a => !a.pinned);
+  let html = '';
+  if (pinned.length) html += C_table(pinned.map(a => C_rows(a, mode)).join(''), mode, 'Pinned');
+  if (others.length) {
+    let rows = '';
+    Object.keys(PROVIDERS).forEach(p => { const g = others.filter(a => a.provider === p).sort((x, y) => x.name.localeCompare(y.name)); if (g.length) rows += `<tr><td colspan="4" style="padding:8px 14px 2px;border-bottom:0"><div class="provider-head" style="padding:0">${PROVIDERS[p].glyph}${PROVIDERS[p].name}</div></td></tr>` + g.map(a => C_rows(a, mode)).join(''); });
+    html += C_table(rows, mode, pinned.length ? 'Other accounts' : 'Accounts');
+  }
+  return html;
+}
+
+const VARIANTS = {
+  A: { name: 'Ledger', accounts: A_accounts, activity: A_activity, divider: true },
+  B: { name: 'Cards', accounts: B_accounts, activity: B_activity },
+  C: { name: 'Table', accounts: C_accounts, activity: C_activity, wide: true },
+};
+// Popover and phone stack accounts above activity; the desktop web page puts them side by side.
+function stacked(V, accounts, mode) { return `<div class="${S.variant}">${V.accounts(accounts, mode)}${V.divider ? '<div class="rule"></div>' : ''}${V.activity()}</div>`; }
+function desktop(V, accounts, mode) { return `<div class="${S.variant} desk"><div class="desk-accounts">${V.accounts(accounts, mode)}</div><div class="desk-activity">${V.activity()}</div></div>`; }
+
+// ---------- menu bar ----------
+function pinsHTML(accounts, mode) {
+  const pinned = accounts.filter(a => a.pinned);
+  if (!pinned.length) return `<span class="pin tally-only" data-tip="Tally">${TALLY_GLYPH}</span>`;
+  return pinned.map(a => {
+    const lines = pinLines(a), c = color(a.idx, mode);
+    const tip = lines.length ? `${a.name} (${PROVIDERS[a.provider].name}): ${lines.map(w => `${w.label.toLowerCase()} ${w.remaining}% remaining`).join(', ')}${a.stale ? `. Stale, last reading ${rel(NOW - a.observed)} ago` : ''}`
+                  : `${a.name} (${PROVIDERS[a.provider].name}): no reading${a.error ? '. ' + a.error : ''}`;
+    const pct = lines.length === 0 ? '<span class="pct unknown">?</span>'
+      : lines.length === 1 ? `<span class="pct">${lines[0].remaining}%</span>`
+      : `<span class="pct stack">${lines.map(w => `<span>${w.remaining}%</span>`).join('')}</span>`;
+    return `<span class="pin" data-tip="${esc(tip)}" tabindex="0">
+      ${S.pin === 'dot' ? `<span class="id-dot" style="background:${c}"></span>` : ''}
+      <span class="logo" style="${S.pin === 'tint' ? 'color:' + c : ''}">${PROVIDERS[a.provider].glyph}</span>
+      ${pct}
+      ${a.stale ? `<span class="warn" aria-label="stale">${WARN}</span>` : ''}
+      ${S.pin === 'underline' ? `<span class="id-underline" style="background:${c}"></span>` : ''}
+    </span>`;
+  }).join('');
+}
+function menubarHTML(accounts, mode) {
+  return `<div class="menubar ${mode}"><div class="pins">${pinsHTML(accounts, mode)}</div><div class="sys"><span>Mon Sep 7</span><span>11:20 AM</span></div></div>`;
+}
+
+// ---------- render ----------
+function render() {
+  const accounts = buildAccounts();
+  const mode = S.appearance, V = VARIANTS[S.variant];
+  const hdr = (big) => `<div class="hdr"><h1>Tally</h1><div class="meta"><span>Updated ${rel(NOW - Math.max(...accounts.filter(a => a.observed).map(a => a.observed)))} ago</span><button data-act="refresh">Refresh</button></div></div>`;
+  document.getElementById('stage').innerHTML = `
+    <p class="stage-note">Variant <b>${S.variant}, ${V.name}</b>. Both menu bars always render so the identity palette can be judged on light and dark. Hover a pin for its tooltip. Click an account to expand details; click a reset-credit chip to walk the redemption flow.</p>
+    <div class="menubars">${menubarHTML(accounts, 'light')}${menubarHTML(accounts, 'dark')}</div>
+    <div class="surfaces">
+      <div><p class="surface-label">Menu bar popover, ${V.wide ? 440 : 360}px${S.clip === 'clip' ? ', scrolls at 720px' : ''}</p>
+        <div class="popover ${mode} ${V.wide ? 'wide' : ''} ${S.clip === 'clip' ? 'clipped' : ''}" id="popover">${hdr()}<div class="body">${stacked(V, accounts, mode)}</div>${overlayHTML(accounts)}</div></div>
+      <div><p class="surface-label">Mobile web over the tailnet, ${S.phone}px</p>
+        <div class="phone ${mode} ${S.phone === '320' ? 'narrow' : ''}" id="phone"><div class="statusbar"><span>11:20</span></div><div class="body">${hdr(true)}${stacked(V, accounts, mode)}</div>${overlayHTML(accounts)}<div class="home"></div></div></div>
+    </div>
+    <p class="surface-label" style="margin-top:36px">Desktop web over the tailnet, browser window</p>
+    <div class="browser ${mode}" id="desktop"><div class="chrome"><span></span><span></span><span></span><div class="url"></div></div><div class="page">${hdr()}${desktop(V, accounts, mode)}</div>${overlayHTML(accounts)}</div>`;
+  renderChrome();
+}
+
+function renderChrome() {
+  const grp = (label, key, opts) => `<div class="grp"><span>${label}</span><div class="opts">${opts.map(([v, l]) => `<button data-k="${key}" data-v="${v}" aria-pressed="${S[key] === v}">${l}</button>`).join('')}</div></div>`;
+  const pal = PALETTES[S.palette];
+  document.getElementById('proto-controls').innerHTML = `<h3>Prototype controls (not part of the design)</h3>
+    ${grp('Popover and phone appearance', 'appearance', [['light', 'Light'], ['dark', 'Dark']])}
+    ${grp('Menu bar', 'bar', [['three', '3 pins'], ['normal', '7 pins'], ['crowded', '14 pins'], ['nopins', 'No pins']])}
+    ${grp('Data state', 'state', [['healthy', 'Healthy'], ['degraded', 'Degraded']])}
+    ${grp('Identity palette', 'palette', Object.entries(PALETTES).map(([k, p]) => [k, p.name]))}
+    <div class="legend">${pal.light.map((c, i) => `<div title="${pal.names[i]}"><i style="background:${c}"></i><i style="background:${pal.dark[i]}"></i></div>`).join('')}</div>
+    <div class="legend-names">${pal.names.map(n => `<span>${n}</span>`).join('')}</div>
+    ${grp('Pin identity mark', 'pin', [['tint', 'Tinted logo'], ['underline', 'Underline'], ['dot', 'Dot']])}
+    ${grp('Popover height', 'clip', [['all', 'Show everything'], ['clip', 'Scroll at 720px']])}
+    ${grp('Phone width', 'phone', [['390', '390'], ['320', '320']])}`;
+  const keys = Object.keys(VARIANTS), i = keys.indexOf(S.variant);
+  document.getElementById('proto-switcher').innerHTML = `<button data-cycle="-1" aria-label="Previous variant">&larr;</button><div><b>${S.variant}</b> <span>(${VARIANTS[S.variant].name})</span></div><button data-cycle="1" aria-label="Next variant">&rarr;</button>`;
+}
+
+// ---------- events ----------
+document.addEventListener('click', e => {
+  const ctl = e.target.closest('#proto-controls button'); if (ctl) { setParam(ctl.dataset.k, ctl.dataset.v); return; }
+  const cyc = e.target.closest('#proto-switcher button'); if (cyc) { cycle(+cyc.dataset.cycle); return; }
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const act = el.dataset.act, id = el.dataset.id;
+  if (act === 'toggle') { UI.expanded.has(id) ? UI.expanded.delete(id) : UI.expanded.add(id); }
+  else if (act === 'range') { UI.range = el.dataset.range; }
+  else if (act === 'prov') { const p = el.dataset.p; UI.openProviders.has(p) ? UI.openProviders.delete(p) : UI.openProviders.add(p); }
+  else if (act === 'info') { UI.overlay = { type: 'info' }; }
+  else if (act === 'credits') { UI.overlay = { type: 'credits', id }; }
+  else if (act === 'unknown') { UI.overlay = { type: 'unknown', id }; }
+  else if (act === 'close') { UI.overlay = null; }
+  else if (act === 'use') { UI.credits[id].confirming = el.dataset.credit; }
+  else if (act === 'cancel') { UI.credits[id].confirming = null; }
+  else if (act === 'confirm') {
+    const c = UI.credits[id]; c.confirming = null; c.pending = el.dataset.credit;
+    setTimeout(() => {
+      c.pending = null;
+      c.outcome = S.state === 'degraded'
+        ? { id: el.dataset.credit, kind: 'unknown', text: 'Outcome unknown. The request was sent but no answer arrived within 15 seconds. Tally will not resend it. Check remaining allowance and credit count before trying again.' }
+        : { id: el.dataset.credit, kind: 'ok', text: 'Reset applied: 2 windows reset. Credit consumed; 1 remains. Fresh usage will show after the next reading.' };
+      render();
+    }, 1500);
+  }
+  else if (act === 'ack') { UI.credits[id].outcome = null; UI.overlay = null; }
+  else if (act === 'ackAccount') { UI.acked = true; UI.overlay = null; }
+  else if (act === 'refresh') { /* no-op in prototype */ }
+  render();
+});
+document.addEventListener('keydown', e => {
+  const t = e.target; if (t.matches('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') cycle(-1); else if (e.key === 'ArrowRight') cycle(1);
+  else if ((e.key === 'Enter' || e.key === ' ') && t.dataset && t.dataset.act === 'toggle') { e.preventDefault(); t.click(); }
+});
+function cycle(d) { const keys = Object.keys(VARIANTS); setParam('variant', keys[(keys.indexOf(S.variant) + d + keys.length) % keys.length]); }
+
+// pin tooltips
+const tip = document.getElementById('tip');
+document.addEventListener('mouseover', e => { const p = e.target.closest('[data-tip]'); if (!p) { tip.style.display = 'none'; return; } tip.textContent = p.dataset.tip; tip.style.display = 'block'; const r = p.getBoundingClientRect(); tip.style.left = Math.min(r.left, innerWidth - 340) + 'px'; tip.style.top = (r.bottom + 6) + 'px'; });
+
+render();
+</script>
+</body>
+</html>

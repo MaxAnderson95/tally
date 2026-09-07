@@ -1,0 +1,1967 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tally Visual Prototype</title>
+<style>
+/* ── Reset ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Theme tokens ────────────────────────────────────────────────── */
+:root {
+  /* Account identity palette (six colors, assigned per provider in order) */
+  --ac-1: #5b9a8b;
+  --ac-2: #d4856b;
+  --ac-3: #c9a84c;
+  --ac-4: #7b8ec9;
+  --ac-5: #b57daa;
+  --ac-6: #d07b6b;
+
+  /* Functional */
+  --warning: #e8a33d;
+  --error: #d45d5d;
+  --success: #5b9a8b;
+  --reset-ready: #6aab73;
+
+  /* Type */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --mono: "SF Mono", "Fira Code", ui-monospace, monospace;
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-app: #1a1a2e;
+  --bg-menu: #252540;
+  --bg-popover: #1e1e38;
+  --bg-surface: #262644;
+  --bg-surface-2: #2e2e50;
+  --bg-surface-3: #34345a;
+  --bg-hover: #30305a;
+  --border: rgba(255,255,255,.08);
+  --border-strong: rgba(255,255,255,.14);
+  --text-1: #f0f0f5;
+  --text-2: #a8a8c0;
+  --text-3: #707088;
+  --bar-track: rgba(255,255,255,.06);
+  --bar-fill: var(--ac-1);
+  --pin-bg: transparent;
+  --pin-bg-hover: rgba(255,255,255,.08);
+}
+
+/* ── Light theme ─────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-app: #e8e6e0;
+  --bg-menu: #f5f4f0;
+  --bg-popover: #fff;
+  --bg-surface: #f0efeb;
+  --bg-surface-2: #e8e7e3;
+  --bg-surface-3: #dddcd8;
+  --bg-hover: #e0dfdb;
+  --border: rgba(0,0,0,.1);
+  --border-strong: rgba(0,0,0,.18);
+  --text-1: #1a1a2e;
+  --text-2: #5a5a70;
+  --text-3: #8a8a98;
+  --bar-track: rgba(0,0,0,.08);
+  --bar-fill: var(--ac-1);
+  --pin-bg: transparent;
+  --pin-bg-hover: rgba(0,0,0,.06);
+}
+
+[data-theme="light"] [data-theme-dark-only] { display: none !important; }
+[data-theme="dark"] [data-theme-light-only] { display: none !important; }
+
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-1);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* ── Page layout ─────────────────────────────────────────────────── */
+.page { padding: 0 0 120px; }
+
+/* ── Section labels ──────────────────────────────────────────────── */
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 20px 20px 6px;
+}
+
+/* ── Menu bar ────────────────────────────────────────────────────── */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: var(--bg-menu);
+  border-bottom: 1px solid var(--border);
+  padding: 0 10px;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.menu-bar__icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.menu-bar__pin {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: default;
+  height: 22px;
+  transition: background .1s;
+}
+.menu-bar__pin:hover { background: var(--pin-bg-hover); }
+
+.menu-bar__pin-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.menu-bar__pin-pct {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.menu-bar__pin-pct--stale {
+  color: var(--warning);
+}
+
+.menu-bar__pin-pct--error {
+  color: var(--error);
+}
+
+.menu-bar__pin-warning {
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--warning);
+  margin-left: 1px;
+}
+
+.menu-bar__spacer { flex: 1; }
+
+.menu-bar__time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  margin-left: 8px;
+}
+
+/* ── Popover ─────────────────────────────────────────────────────── */
+.popover {
+  background: var(--bg-popover);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  max-width: 380px;
+  margin: 6px auto 0;
+  overflow: hidden;
+}
+
+.popover__header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.popover__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+/* ── Account card ────────────────────────────────────────────────── */
+.acct {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.acct:last-child { border-bottom: none; }
+
+.acct__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.acct__color {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.acct__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.acct__plan {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.acct__provider-badge {
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--bg-surface-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ── Quota window ────────────────────────────────────────────────── */
+.window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+.window__label {
+  font-size: 11px;
+  color: var(--text-2);
+  width: 80px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.window__bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bar-track);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.window__bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width .2s;
+}
+
+.window__pct {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--text-1);
+}
+
+.window__reset {
+  font-size: 10px;
+  color: var(--text-3);
+  width: 60px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.window--stale .window__pct { color: var(--warning); }
+.window--error .window__pct { color: var(--error); }
+
+/* ── Balance summary ─────────────────────────────────────────────── */
+.balance-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.balance-row__value {
+  font-weight: 500;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-row__dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+/* ── Expanded details ────────────────────────────────────────────── */
+.detail-toggle {
+  font-size: 11px;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 4px 0 0;
+  border: none;
+  background: none;
+  font-family: var(--font);
+}
+.detail-toggle:hover { color: var(--text-2); }
+
+.details {
+  display: none;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.details.open { display: block; }
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 2px 0;
+  color: var(--text-2);
+}
+.detail-row__value {
+  font-weight: 500;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Warning / error badges ──────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.badge--warning {
+  background: rgba(232,163,61,.12);
+  color: var(--warning);
+}
+
+.badge--error {
+  background: rgba(212,93,93,.12);
+  color: var(--error);
+}
+
+.badge--info {
+  background: rgba(91,154,139,.12);
+  color: var(--success);
+}
+
+/* ── Activity section ────────────────────────────────────────────── */
+.activity {
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.activity__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.activity__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.activity__tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.activity__tab {
+  font-size: 11px;
+  font-family: var(--font);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.activity__tab:hover { background: var(--bg-hover); color: var(--text-2); }
+.activity__tab.active { background: var(--bg-surface-2); color: var(--text-1); font-weight: 500; }
+
+/* ── Totals row ──────────────────────────────────────────────────── */
+.totals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.total-card {
+  background: var(--bg-surface);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.total-card__label {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+
+.total-card__value {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+
+.total-card__unit {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-2);
+  margin-left: 2px;
+}
+
+/* ── Daily trend (simplified bar chart) ──────────────────────────── */
+.trend {
+  margin-bottom: 10px;
+}
+
+.trend__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 40px;
+}
+
+.trend__bar {
+  flex: 1;
+  background: var(--ac-1);
+  border-radius: 2px 2px 0 0;
+  min-height: 1px;
+  opacity: .7;
+  transition: opacity .1s;
+}
+.trend__bar:hover { opacity: 1; }
+
+.trend__labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-3);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Provider breakdown ──────────────────────────────────────────── */
+.breakdown {
+  margin-bottom: 4px;
+}
+
+.breakdown__provider {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  padding: 6px 0 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.breakdown__provider-color {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.breakdown__model {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 2px 0 2px 14px;
+  color: var(--text-2);
+}
+
+.breakdown__model-name {
+  color: var(--text-1);
+}
+
+.breakdown__model-tokens {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 60px;
+}
+
+.breakdown__model-cost {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 50px;
+  color: var(--text-2);
+}
+
+.breakdown__model-partial {
+  font-size: 10px;
+  color: var(--warning);
+}
+
+/* ── Cost summary ────────────────────────────────────────────────── */
+.cost-summary {
+  background: var(--bg-surface);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+
+.cost-summary__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 2px 0;
+  color: var(--text-2);
+}
+
+.cost-summary__row--total {
+  font-weight: 600;
+  color: var(--text-1);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.cost-summary__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-summary__note {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 4px;
+  font-style: italic;
+}
+
+/* ── Info panel ──────────────────────────────────────────────────── */
+.info-panel {
+  background: var(--bg-surface);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.info-panel strong {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/* ── Banked resets ───────────────────────────────────────────────── */
+.resets {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.resets__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.resets__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.resets__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--reset-ready);
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(106,171,115,.1);
+}
+.resets__count:hover { background: rgba(106,171,115,.18); }
+
+/* ── Credit list ─────────────────────────────────────────────────── */
+.credit-list { display: none; }
+.credit-list.open { display: block; }
+
+.credit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.credit:last-child { border-bottom: none; }
+
+.credit__info { color: var(--text-2); }
+.credit__expiry {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.credit__action {
+  font-size: 11px;
+  font-family: var(--font);
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  transition: background .1s;
+  background: var(--reset-ready);
+  color: #fff;
+}
+.credit__action:hover { filter: brightness(1.1); }
+.credit__action:disabled {
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+/* ── Confirm dialog ──────────────────────────────────────────────── */
+.confirm-dialog {
+  display: none;
+  background: var(--bg-surface);
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+}
+.confirm-dialog.open { display: block; }
+
+.confirm-dialog__text {
+  font-size: 12px;
+  color: var(--text-1);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.confirm-dialog__btn {
+  font-size: 11px;
+  font-family: var(--font);
+  font-weight: 500;
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  background: var(--bg-surface-2);
+  color: var(--text-1);
+}
+.confirm-dialog__btn--primary {
+  background: var(--reset-ready);
+  color: #fff;
+  border-color: var(--reset-ready);
+}
+.confirm-dialog__btn--primary:hover { filter: brightness(1.1); }
+
+/* ── Outcome states ──────────────────────────────────────────────── */
+.outcome {
+  display: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.outcome.open { display: flex; align-items: center; gap: 6px; }
+
+.outcome--success {
+  background: rgba(91,154,139,.12);
+  color: var(--success);
+}
+
+.outcome--failure {
+  background: rgba(212,93,93,.12);
+  color: var(--error);
+}
+
+.outcome--unknown {
+  background: rgba(232,163,61,.12);
+  color: var(--warning);
+}
+
+.outcome__dismiss {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font);
+}
+
+/* ── Mobile layout ───────────────────────────────────────────────── */
+.mobile-frame {
+  max-width: 375px;
+  margin: 0 auto;
+  background: var(--bg-popover);
+  border-radius: 20px;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 30px rgba(0,0,0,.2);
+  overflow: hidden;
+}
+
+.mobile-frame__notch {
+  height: 28px;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-frame__notch-pill {
+  width: 80px;
+  height: 18px;
+  background: #1a1a2e;
+  border-radius: 10px;
+}
+
+.mobile-frame__status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 20px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.mobile-frame__content {
+  padding: 0 16px 20px;
+}
+
+.mobile-frame__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 14px;
+  letter-spacing: -.02em;
+}
+
+/* ── Mobile account row ──────────────────────────────────────────── */
+.mobile-acct {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.mobile-acct:last-child { border-bottom: none; }
+
+.mobile-acct__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.mobile-acct__color {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.mobile-acct__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-acct__plan {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.mobile-acct__window {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0 3px 14px;
+}
+
+.mobile-acct__window-label {
+  font-size: 10px;
+  color: var(--text-3);
+  width: 50px;
+  flex-shrink: 0;
+}
+
+.mobile-acct__window-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bar-track);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mobile-acct__window-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.mobile-acct__window-pct {
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  width: 30px;
+  text-align: right;
+  color: var(--text-1);
+}
+
+.mobile-acct__window-reset {
+  font-size: 9px;
+  color: var(--text-3);
+  width: 50px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-acct__balance {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0 3px 14px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.mobile-acct__balance-val {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+/* ── Mobile activity ─────────────────────────────────────────────── */
+.mobile-activity {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.mobile-activity__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.mobile-activity__tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.mobile-activity__tab {
+  font-size: 10px;
+  font-family: var(--font);
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.mobile-activity__tab.active { background: var(--bg-surface-2); color: var(--text-1); font-weight: 500; }
+
+.mobile-totals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.mobile-total {
+  background: var(--bg-surface);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+
+.mobile-total__label {
+  font-size: 9px;
+  color: var(--text-3);
+  margin-bottom: 1px;
+}
+
+.mobile-total__value {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+
+/* ── Mobile reset badge ──────────────────────────────────────────── */
+.mobile-resets {
+  margin-top: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.mobile-resets__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mobile-resets__label {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.mobile-resets__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--reset-ready);
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(106,171,115,.1);
+}
+
+/* ── Floating variant switcher ───────────────────────────────────── */
+.switcher {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1a1a2e;
+  color: #f0f0f5;
+  padding: 6px 12px;
+  border-radius: 24px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  z-index: 1000;
+  font-size: 12px;
+  user-select: none;
+}
+
+.switcher__btn {
+  background: none;
+  border: none;
+  color: #a8a8c0;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  font-family: var(--font);
+}
+.switcher__btn:hover { color: #f0f0f5; background: rgba(255,255,255,.1); }
+
+.switcher__label {
+  min-width: 180px;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* ── Utility ─────────────────────────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.hidden { display: none !important; }
+
+/* ── Spacing helper ──────────────────────────────────────────────── */
+.spacer-8 { height: 8px; }
+.spacer-12 { height: 12px; }
+.spacer-16 { height: 16px; }
+.spacer-24 { height: 24px; }
+
+/* ── Prototype banner ────────────────────────────────────────────── */
+.prototype-banner {
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 20px;
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: center;
+}
+</style>
+</head>
+<body>
+
+<div class="prototype-banner">
+  Tally visual prototype — issue #12 — throwaway, not production
+</div>
+
+<div class="page" id="page">
+  <!-- Content injected by JS per variant -->
+</div>
+
+<!-- Variant switcher -->
+<div class="switcher" role="toolbar" aria-label="Prototype variant switcher">
+  <button class="switcher__btn" id="prev" aria-label="Previous variant">&#8592;</button>
+  <span class="switcher__label" id="variant-label"></span>
+  <button class="switcher__btn" id="next" aria-label="Next variant">&#8594;</button>
+</div>
+
+<script>
+// ── Data ──────────────────────────────────────────────────────────
+
+const COLORS = ['#5b9a8b','#d4856b','#c9a84c','#7b8ec9','#b57daa','#d07b6b'];
+
+const PROVIDERS = {
+  anthropic: { name: 'Anthropic', abbr: 'A', icon: 'A' },
+  openai:    { name: 'OpenAI',    abbr: 'O', icon: 'O' },
+  'opencode-go': { name: 'OpenCode Go', abbr: 'G', icon: 'G' },
+  xai:       { name: 'xAI',       abbr: 'X', icon: 'X' },
+};
+
+// Provider-level color assignment (index within provider)
+const providerColorIdx = {};
+
+function colorFor(provider, acctIdx) {
+  if (!(provider in providerColorIdx)) providerColorIdx[provider] = 0;
+  const idx = acctIdx !== undefined ? acctIdx : providerColorIdx[provider]++;
+  return COLORS[idx % COLORS.length];
+}
+
+const ACCOUNTS = [
+  {
+    id: 'anth-fable',
+    provider: 'anthropic',
+    name: 'Anthropic Fable',
+    plan: 'Max',
+    windows: [
+      { label: '5-hour', remaining: 73, total: 100, resetIn: '2h 14m', resetTime: '3:34 PM' },
+      { label: 'Weekly', remaining: 88, total: 100, resetIn: '4d 12h', resetTime: 'Sat 11:20 AM' },
+      { label: 'Monthly', remaining: 95, total: 100, resetIn: '23d', resetTime: 'Sep 30' },
+    ],
+    balance: { credits: 0, resets: 0 },
+    pacing: { projectedAtReset: '42%', spareAllowance: '27%', runOutEstimate: '11h 40m' },
+    extraUsage: '$0.00',
+  },
+  {
+    id: 'anth-opus',
+    provider: 'anthropic',
+    name: 'Anthropic Opus',
+    plan: 'Max',
+    windows: [
+      { label: '5-hour', remaining: 12, total: 100, resetIn: '48m', resetTime: '12:08 PM' },
+      { label: 'Weekly', remaining: 45, total: 100, resetIn: '4d 12h', resetTime: 'Sat 11:20 AM' },
+    ],
+    balance: { credits: 0, resets: 0 },
+    pacing: { projectedAtReset: '8%', spareAllowance: '4%', runOutEstimate: '22m' },
+    extraUsage: '$0.00',
+  },
+  {
+    id: 'oai-sol',
+    provider: 'openai',
+    name: 'OpenAI Sol',
+    plan: 'Pro',
+    windows: [
+      { label: '5-hour', remaining: 56, total: 100, resetIn: '1h 33m', resetTime: '12:53 PM' },
+      { label: 'Weekly', remaining: 71, total: 100, resetIn: '5d 8h', resetTime: 'Sun 7:20 AM' },
+    ],
+    balance: { credits: 3, resets: 0 },
+    pacing: { projectedAtReset: '34%', spareAllowance: '22%', runOutEstimate: '5h 10m' },
+    extraUsage: '$0.00',
+  },
+  {
+    id: 'oai-astra',
+    provider: 'openai',
+    name: 'OpenAI Astra',
+    plan: 'Pro',
+    windows: [
+      { label: '5-hour', remaining: 91, total: 100, resetIn: '4h 10m', resetTime: '3:30 PM' },
+    ],
+    balance: { credits: 0, resets: 1 },
+    pacing: { projectedAtReset: '82%', spareAllowance: '9%', runOutEstimate: '22h' },
+    extraUsage: '$0.00',
+  },
+  {
+    id: 'go-kimi',
+    provider: 'opencode-go',
+    name: 'Go Kimi',
+    plan: 'Go',
+    windows: [
+      { label: '5-hour', remaining: 41, total: 100, resetIn: '52m', resetTime: '12:12 PM' },
+      { label: 'Weekly', remaining: 67, total: 100, resetIn: '3d 6h', resetTime: 'Fri 11:20 AM' },
+      { label: 'Monthly', remaining: 82, total: 100, resetIn: '18d', resetTime: 'Sep 25' },
+    ],
+    balance: { credits: 0, resets: 0 },
+    pacing: { projectedAtReset: '28%', spareAllowance: '13%', runOutEstimate: '3h 45m' },
+    extraUsage: '$0.00',
+  },
+  {
+    id: 'xai-grok',
+    provider: 'xai',
+    name: 'xAI Grok',
+    plan: 'SuperGrok',
+    windows: [
+      { label: 'Daily', remaining: 84, total: 100, resetIn: '6h 30m', resetTime: '5:50 PM' },
+    ],
+    balance: { credits: 0, resets: 0 },
+    pacing: { projectedAtReset: '76%', spareAllowance: '8%', runOutEstimate: '14h' },
+    extraUsage: '$0.00',
+  },
+];
+
+// ── Activity data ─────────────────────────────────────────────────
+
+const ACTIVITY_DATA = {
+  today: {
+    tokens: '4.04B',
+    cost: '$28.62',
+    dailyBars: [
+      { label: '12am', h: 3 },
+      { label: '3am', h: 1 },
+      { label: '6am', h: 5 },
+      { label: '9am', h: 18 },
+      { label: '12pm', h: 32 },
+      { label: '3pm', h: 12 },
+      { label: '6pm', h: 0 },
+      { label: '9pm', h: 0 },
+    ],
+    providers: [
+      {
+        name: 'Anthropic', color: COLORS[0],
+        models: [
+          { name: 'claude-opus-5', tokens: '1.82B', cost: '$18.20', partial: false },
+          { name: 'claude-fable-5', tokens: '486M', cost: '$3.75', partial: false },
+          { name: 'claude-fable-5-1', tokens: '96M', cost: '$0.58', partial: false, note: 'CW range' },
+          { name: 'claude-sonnet-5', tokens: '12M', cost: '$0.12', partial: false },
+        ],
+      },
+      {
+        name: 'OpenAI', color: COLORS[1],
+        models: [
+          { name: 'gpt-6-astra', tokens: '218M', cost: '$2.98', partial: false },
+          { name: 'gpt-5.6-sol', tokens: '450M', cost: '$2.70', partial: false },
+        ],
+      },
+      {
+        name: 'OpenCode Go', color: COLORS[3],
+        models: [
+          { name: 'glm-5.3', tokens: '87M', cost: '$0.16', partial: false },
+          { name: 'kimi-k3', tokens: '24M', cost: '$0.10', partial: false },
+        ],
+      },
+    ],
+    costSummary: {
+      fullyPriced: '$28.59',
+      rangeEstimate: '$0.03',
+      unpriced: '$0.00',
+      total: '$28.62',
+      note: 'Anthropic CW values use 5m-to-1h bounds. 13 of 15 model pairs fully priced.',
+    },
+  },
+  yesterday: {
+    tokens: '2.17B',
+    cost: '$14.84',
+    dailyBars: [
+      { label: '12am', h: 2 },
+      { label: '3am', h: 8 },
+      { label: '6am', h: 12 },
+      { label: '9am', h: 35 },
+      { label: '12pm', h: 28 },
+      { label: '3pm', h: 18 },
+      { label: '6pm', h: 10 },
+      { label: '9pm', h: 5 },
+    ],
+    providers: [
+      {
+        name: 'Anthropic', color: COLORS[0],
+        models: [
+          { name: 'claude-opus-5', tokens: '1.2B', cost: '$12.00', partial: false },
+          { name: 'claude-fable-5', tokens: '310M', cost: '$2.38', partial: false },
+        ],
+      },
+      {
+        name: 'OpenAI', color: COLORS[1],
+        models: [
+          { name: 'gpt-5.6-sol', tokens: '640M', cost: '$0.46', partial: false },
+        ],
+      },
+    ],
+    costSummary: {
+      fullyPriced: '$14.84',
+      rangeEstimate: '$0.00',
+      unpriced: '$0.00',
+      total: '$14.84',
+      note: 'All model pairs fully priced at standard rates.',
+    },
+  },
+  last30days: {
+    tokens: '58.2B',
+    cost: '$412.18',
+    dailyBars: [
+      { label: 'Aug 9', h: 22 },
+      { label: 'Aug 13', h: 28 },
+      { label: 'Aug 17', h: 15 },
+      { label: 'Aug 21', h: 38 },
+      { label: 'Aug 25', h: 32 },
+      { label: 'Aug 29', h: 40 },
+      { label: 'Sep 2', h: 35 },
+      { label: 'Sep 6', h: 30 },
+    ],
+    providers: [
+      {
+        name: 'Anthropic', color: COLORS[0],
+        models: [
+          { name: 'claude-opus-5', tokens: '28.4B', cost: '$284.00', partial: false },
+          { name: 'claude-fable-5', tokens: '6.8B', cost: '$52.30', partial: false },
+          { name: 'claude-fable-5-1', tokens: '1.4B', cost: '$8.50', partial: true, note: 'CW range' },
+          { name: 'claude-haiku-4-5', tokens: '0.4B', cost: '$0.40', partial: false },
+          { name: 'claude-sonnet-5', tokens: '0.2B', cost: '$0.20', partial: false },
+        ],
+      },
+      {
+        name: 'OpenAI', color: COLORS[1],
+        models: [
+          { name: 'gpt-6-astra', tokens: '3.2B', cost: '$32.00', partial: false },
+          { name: 'gpt-5.6-sol', tokens: '10.4B', cost: '$30.78', partial: false },
+          { name: 'gpt-5.6-sol-fast', tokens: '0.06B', cost: 'Unpriced', partial: true, note: 'Unverified ID' },
+          { name: 'gpt-5.6-luna', tokens: '0.9B', cost: '$1.10', partial: false },
+        ],
+      },
+      {
+        name: 'OpenCode Go', color: COLORS[3],
+        models: [
+          { name: 'glm-5.3', tokens: '1.8B', cost: '$3.50', partial: false },
+          { name: 'glm-5.3-flash', tokens: '0.4B', cost: '$0.06', partial: false },
+          { name: 'kimi-k3', tokens: '0.3B', cost: '$1.20', partial: false },
+          { name: 'deepseek-v4-flash', tokens: '0.03B', cost: '$0.01-$0.02', partial: true, note: 'Peak/off-peak range' },
+          { name: 'ox-alpha-free', tokens: '0.05B', cost: 'Unpriced', partial: true, note: 'No current price ref' },
+        ],
+      },
+      {
+        name: 'xAI', color: COLORS[4],
+        models: [
+          { name: 'grok-4.6', tokens: '0.001B', cost: '$0.01', partial: false },
+        ],
+      },
+    ],
+    costSummary: {
+      fullyPriced: '$410.04',
+      rangeEstimate: '$1.76',
+      unpriced: '$0.38',
+      total: '~$412.18',
+      note: 'Pricing revision 2026-09-07-r1. Partial coverage from CW ranges (Anthropic), time tiers (DeepSeek), and unmatched IDs (gpt-5.6-sol-fast, ox-alpha-free).',
+    },
+  },
+};
+
+// ── Stale / error account variants ────────────────────────────────
+
+const STALE_ACCOUNT = {
+  id: 'anth-stale',
+  provider: 'anthropic',
+  name: 'Anthropic Old',
+  plan: 'Max',
+  stale: true,
+  staleAge: '34m ago',
+  staleError: 'Connection timed out',
+  windows: [
+    { label: '5-hour', remaining: 62, total: 100, resetIn: '?', resetTime: 'Unknown' },
+    { label: 'Weekly', remaining: 80, total: 100, resetIn: '3d 8h', resetTime: 'Fri 3:20 PM' },
+  ],
+  balance: { credits: 0, resets: 0 },
+  pacing: { projectedAtReset: null, spareAllowance: null, runOutEstimate: 'Unavailable' },
+  extraUsage: '$0.00',
+};
+
+const ERROR_ACCOUNT = {
+  id: 'go-error',
+  provider: 'opencode-go',
+  name: 'Go Failing',
+  plan: 'Go',
+  error: true,
+  errorMsg: 'Read failed',
+  windows: [
+    { label: '5-hour', remaining: null, total: 100, resetIn: '?', resetTime: 'Unknown', error: true },
+    { label: 'Weekly', remaining: null, total: 100, resetIn: '?', resetTime: 'Unknown', error: true },
+  ],
+  balance: { credits: 0, resets: 0 },
+  pacing: { projectedAtReset: null, spareAllowance: null, runOutEstimate: 'Unavailable' },
+  extraUsage: '$0.00',
+};
+
+// ── Rendering helpers ─────────────────────────────────────────────
+
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'className') el.className = v;
+      else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
+      else el.setAttribute(k, v);
+    }
+  }
+  for (const c of children) {
+    if (typeof c === 'string') el.appendChild(document.createTextNode(c));
+    else if (c) el.appendChild(c);
+  }
+  return el;
+}
+
+function formatTokens(str) { return str; }
+
+// ── Component renderers ───────────────────────────────────────────
+
+function renderMenuBar(accts, opts = {}) {
+  const bar = h('div', { className: 'menu-bar' });
+
+  // App icon
+  const icon = h('div', { className: 'menu-bar__icon', style: { background: '#5b9a8b' } }, 'T');
+  bar.appendChild(icon);
+
+  // Pins
+  const pinned = accts.filter(a => !a.unpinned);
+  for (const acct of pinned) {
+    const c = colorFor(acct.provider);
+    const pin = h('div', { className: 'menu-bar__pin' });
+    const pinIcon = h('div', {
+      className: 'menu-bar__pin-icon',
+      style: { background: c },
+      title: acct.name,
+    }, PROVIDERS[acct.provider].abbr);
+    pin.appendChild(pinIcon);
+
+    const win = acct.windows[0];
+    let pctText = '?';
+    let pctClass = 'menu-bar__pin-pct';
+    if (win.remaining !== null) {
+      pctText = win.remaining + '%';
+      if (acct.stale) pctClass += ' menu-bar__pin-pct--stale';
+    } else {
+      pctClass += ' menu-bar__pin-pct--error';
+    }
+    pin.appendChild(h('span', { className: pctClass }, pctText));
+
+    if (acct.stale) {
+      pin.appendChild(h('span', { className: 'menu-bar__pin-warning', title: 'Stale: ' + acct.staleAge + ' - ' + acct.staleError }, '\u26A0'));
+    }
+    if (acct.error) {
+      pin.appendChild(h('span', { className: 'menu-bar__pin-warning', style: { color: 'var(--error)' }, title: acct.errorMsg }, '?'));
+    }
+
+    bar.appendChild(pin);
+  }
+
+  bar.appendChild(h('div', { className: 'menu-bar__spacer' }));
+  bar.appendChild(h('span', { className: 'menu-bar__time' }, 'Mon 11:20 AM'));
+
+  return bar;
+}
+
+function renderAccountCard(acct, opts = {}) {
+  const card = h('div', { className: 'acct' });
+  const c = colorFor(acct.provider);
+
+  // Header
+  const header = h('div', { className: 'acct__header' });
+  header.appendChild(h('div', { className: 'acct__color', style: { background: c } }));
+  header.appendChild(h('span', { className: 'acct__name' }, acct.name));
+  if (acct.stale) {
+    header.appendChild(h('span', { className: 'badge badge--warning' }, '\u26A0 Stale ' + acct.staleAge));
+  }
+  if (acct.error) {
+    header.appendChild(h('span', { className: 'badge badge--error' }, '\u2716 ' + acct.errorMsg));
+  }
+  header.appendChild(h('span', { className: 'acct__plan' }, acct.plan));
+  header.appendChild(h('span', { className: 'acct__provider-badge' }, acct.provider === 'opencode-go' ? 'Go' : PROVIDERS[acct.provider].name));
+  card.appendChild(header);
+
+  // Quota windows
+  for (const win of acct.windows) {
+    const row = h('div', { className: 'window' + (acct.stale ? ' window--stale' : '') + (win.error ? ' window--error' : '') });
+    row.appendChild(h('span', { className: 'window__label' }, win.label));
+
+    const bar = h('div', { className: 'window__bar' });
+    const pct = win.remaining !== null ? win.remaining : 0;
+    const fill = h('div', {
+      className: 'window__bar-fill',
+      style: { width: pct + '%', background: win.error ? 'var(--error)' : c, opacity: acct.stale ? .5 : 1 },
+    });
+    bar.appendChild(fill);
+    row.appendChild(bar);
+
+    row.appendChild(h('span', {
+      className: 'window__pct',
+      style: win.remaining === null ? { color: 'var(--error)' } : {},
+    }, win.remaining !== null ? win.remaining + '%' : '?'));
+
+    row.appendChild(h('span', { className: 'window__reset' }, 'in ' + win.resetIn));
+    card.appendChild(row);
+  }
+
+  // Balance
+  if (acct.balance.resets > 0 || acct.balance.credits > 0) {
+    const bal = h('div', { className: 'balance-row' });
+    if (acct.balance.resets > 0) {
+      bal.appendChild(h('span', { className: 'balance-row__value', style: { color: 'var(--reset-ready)' } }, acct.balance.resets + ' reset'));
+    }
+    if (acct.balance.credits > 0) {
+      if (acct.balance.resets > 0) bal.appendChild(h('span', { className: 'balance-row__dot' }));
+      bal.appendChild(h('span', { className: 'balance-row__value' }, acct.balance.credits + ' credits'));
+    }
+    card.appendChild(bal);
+  }
+
+  // Stale observation
+  if (acct.stale) {
+    const obs = h('div', { className: 'detail-row' });
+    obs.appendChild(h('span', {}, 'Last reading'));
+    obs.appendChild(h('span', { className: 'detail-row__value', style: { color: 'var(--warning)' } }, acct.staleAge + ' - ' + acct.staleError));
+    card.appendChild(obs);
+  }
+
+  // Expandable details
+  const toggle = h('button', { className: 'detail-toggle' }, 'Show details');
+  const details = h('div', { className: 'details' });
+
+  // Pacing
+  if (acct.pacing.projectedAtReset) {
+    const paceSection = h('div', {});
+    paceSection.appendChild(h('div', { className: 'detail-row' }, h('span', {}, 'Projected at reset'), h('span', { className: 'detail-row__value' }, acct.pacing.projectedAtReset)));
+    paceSection.appendChild(h('div', { className: 'detail-row' }, h('span', {}, 'Spare allowance'), h('span', { className: 'detail-row__value' }, acct.pacing.spareAllowance)));
+    paceSection.appendChild(h('div', { className: 'detail-row' }, h('span', {}, 'Est. run-out'), h('span', { className: 'detail-row__value' }, acct.pacing.runOutEstimate)));
+    details.appendChild(paceSection);
+  } else {
+    details.appendChild(h('div', { className: 'detail-row' }, h('span', {}, 'Pacing'), h('span', { className: 'detail-row__value', style: { color: 'var(--text-3)' } }, acct.pacing.runOutEstimate || 'Unavailable')));
+  }
+
+  // Reset time details
+  for (const win of acct.windows) {
+    details.appendChild(h('div', { className: 'detail-row' },
+      h('span', {}, win.label + ' reset'),
+      h('span', { className: 'detail-row__value' }, win.resetTime),
+    ));
+  }
+
+  // Extra usage
+  details.appendChild(h('div', { className: 'detail-row' }, h('span', {}, 'Extra usage'), h('span', { className: 'detail-row__value' }, acct.extraUsage)));
+
+  toggle.addEventListener('click', () => {
+    details.classList.toggle('open');
+    toggle.textContent = details.classList.contains('open') ? 'Hide details' : 'Show details';
+  });
+
+  card.appendChild(toggle);
+  card.appendChild(details);
+
+  return card;
+}
+
+function renderActivity(activityRange, opts = {}) {
+  const data = ACTIVITY_DATA[activityRange];
+  const section = h('div', { className: 'activity' });
+
+  // Header with tabs
+  const header = h('div', { className: 'activity__header' });
+  header.appendChild(h('span', { className: 'activity__title' }, 'Recorded OpenCode activity'));
+  const tabs = h('div', { className: 'activity__tabs' });
+  for (const range of ['today', 'yesterday', 'last30days']) {
+    const label = range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : 'Last 30 days';
+    const tab = h('button', {
+      className: 'activity__tab' + (range === activityRange ? ' active' : ''),
+      onClick: () => { opts.onRangeChange?.(range); },
+    }, label);
+    tabs.appendChild(tab);
+  }
+  header.appendChild(tabs);
+  section.appendChild(header);
+
+  // Totals
+  const totals = h('div', { className: 'totals' });
+  const tokCard = h('div', { className: 'total-card' });
+  tokCard.appendChild(h('div', { className: 'total-card__label' }, 'Total tokens'));
+  tokCard.appendChild(h('span', { className: 'total-card__value' }, data.tokens));
+  totals.appendChild(tokCard);
+
+  const costCard = h('div', { className: 'total-card' });
+  costCard.appendChild(h('div', { className: 'total-card__label' }, 'API-equivalent cost'));
+  costCard.appendChild(h('span', { className: 'total-card__value' }, data.cost));
+  costCard.appendChild(h('div', { className: 'total-card__label', style: { marginTop: '2px' } }, 'Pricing rev. 2026-09-07-r1'));
+  totals.appendChild(costCard);
+  section.appendChild(totals);
+
+  // Daily trend
+  const trend = h('div', { className: 'trend' });
+  const bars = h('div', { className: 'trend__bars' });
+  const maxH = Math.max(...data.dailyBars.map(b => b.h));
+  for (const bar of data.dailyBars) {
+    const h_ = maxH > 0 ? (bar.h / maxH) * 100 : 0;
+    bars.appendChild(h('div', { className: 'trend__bar', style: { height: h_ + '%' }, title: bar.label + ': ' + bar.h + 'B tokens' }));
+  }
+  trend.appendChild(bars);
+  const labels = h('div', { className: 'trend__labels' });
+  labels.appendChild(h('span', {}, data.dailyBars[0].label));
+  labels.appendChild(h('span', {}, data.dailyBars[data.dailyBars.length - 1].label));
+  trend.appendChild(labels);
+  section.appendChild(trend);
+
+  // Provider breakdowns
+  const breakdown = h('div', { className: 'breakdown' });
+  for (const prov of data.providers) {
+    const provRow = h('div', { className: 'breakdown__provider' });
+    provRow.appendChild(h('div', { className: 'breakdown__provider-color', style: { background: prov.color } }));
+    provRow.appendChild(h('span', {}, prov.name));
+    breakdown.appendChild(provRow);
+
+    for (const model of prov.models) {
+      const modelRow = h('div', { className: 'breakdown__model' });
+      const nameSpan = h('span', { className: 'breakdown__model-name' }, model.name);
+      if (model.note) {
+        nameSpan.appendChild(h('span', { className: 'breakdown__model-partial', style: { marginLeft: '6px' } }, '(' + model.note + ')'));
+      }
+      modelRow.appendChild(nameSpan);
+      modelRow.appendChild(h('span', { className: 'breakdown__model-tokens' }, model.tokens));
+      modelRow.appendChild(h('span', { className: 'breakdown__model-cost' }, model.cost));
+      breakdown.appendChild(modelRow);
+    }
+  }
+  section.appendChild(breakdown);
+
+  // Cost summary
+  const cs = h('div', { className: 'cost-summary' });
+  cs.appendChild(h('div', { className: 'cost-summary__row' }, h('span', {}, 'Fully priced'), h('span', { className: 'cost-summary__value' }, data.costSummary.fullyPriced)));
+  cs.appendChild(h('div', { className: 'cost-summary__row' }, h('span', {}, 'Range estimates'), h('span', { className: 'cost-summary__value' }, data.costSummary.rangeEstimate)));
+  cs.appendChild(h('div', { className: 'cost-summary__row' }, h('span', {}, 'Unpriced'), h('span', { className: 'cost-summary__value' }, data.costSummary.unpriced)));
+  cs.appendChild(h('div', { className: 'cost-summary__row cost-summary__row--total' }, h('span', {}, 'Total'), h('span', { className: 'cost-summary__value' }, data.costSummary.total)));
+  cs.appendChild(h('div', { className: 'cost-summary__note' }, data.costSummary.note));
+  section.appendChild(cs);
+
+  // Info panel
+  const info = h('div', { className: 'info-panel' });
+  info.innerHTML = '<strong>Partial history:</strong> Records from this Mac\'s OpenCode V2 assistant database. Attribution to individual accounts is not available. Deletions, imports, and omitted internal requests prevent complete-history claims. Timezone: America/New_York.';
+  section.appendChild(info);
+
+  return section;
+}
+
+function renderBankedResets(acct, opts = {}) {
+  const section = h('div', { className: 'resets' });
+  const header = h('div', { className: 'resets__header' });
+  header.appendChild(h('span', { className: 'resets__title' }, 'Banked resets'));
+  header.appendChild(h('span', { className: 'resets__count' }, acct.balance.resets + ' available'));
+  section.appendChild(header);
+
+  // Credit list
+  const creditList = h('div', { className: 'credit-list' + (opts.showCredits ? ' open' : '') });
+
+  const credits = [];
+  if (acct.id === 'oai-astra') {
+    credits.push({ expiry: 'Sep 14, 2026', age: '7 days left' });
+  }
+  if (acct.id === 'oai-sol') {
+    credits.push({ expiry: 'Sep 21, 2026', age: '14 days left' });
+    credits.push({ expiry: 'Sep 18, 2026', age: '11 days left' });
+    credits.push({ expiry: 'Sep 12, 2026', age: '5 days left' });
+  }
+
+  for (const credit of credits) {
+    const row = h('div', { className: 'credit' });
+    row.appendChild(h('span', { className: 'credit__info' }, 'Expires ' + credit.expiry));
+    row.appendChild(h('span', { className: 'credit__expiry' }, credit.age));
+
+    const btn = h('button', { className: 'credit__action' }, 'Redeem');
+    btn.addEventListener('click', () => {
+      opts.onRedeem?.(acct, credit);
+    });
+    row.appendChild(btn);
+    creditList.appendChild(row);
+  }
+
+  section.appendChild(creditList);
+
+  // Confirm dialog
+  if (opts.showConfirm) {
+    const dialog = h('div', { className: 'confirm-dialog open' });
+    dialog.appendChild(h('div', { className: 'confirm-dialog__text' },
+      'Redeem one banked reset for ' + acct.name + '? This will restore your 5-hour quota allowance.',
+    ));
+    const actions = h('div', { className: 'confirm-dialog__actions' });
+    actions.appendChild(h('button', { className: 'confirm-dialog__btn', onClick: () => opts.onCancelConfirm?.() }, 'Cancel'));
+    actions.appendChild(h('button', { className: 'confirm-dialog__btn confirm-dialog__btn--primary', onClick: () => opts.onConfirmRedeem?.() }, 'Confirm redemption'));
+    dialog.appendChild(actions);
+    section.appendChild(dialog);
+  }
+
+  // Outcome states
+  if (opts.outcome === 'success') {
+    const out = h('div', { className: 'outcome outcome--success open' });
+    out.appendChild(h('span', {}, '\u2713'));
+    out.appendChild(h('span', {}, 'Reset redeemed. Quota restored.'));
+    const dismiss = h('button', { className: 'outcome__dismiss', onClick: () => opts.onDismissOutcome?.() }, 'Dismiss');
+    out.appendChild(dismiss);
+    section.appendChild(out);
+  }
+
+  if (opts.outcome === 'failure') {
+    const out = h('div', { className: 'outcome outcome--failure open' });
+    out.appendChild(h('span', {}, '\u2716'));
+    out.appendChild(h('span', {}, 'Redemption failed. Provider returned an error.'));
+    const dismiss = h('button', { className: 'outcome__dismiss', onClick: () => opts.onDismissOutcome?.() }, 'Dismiss');
+    out.appendChild(dismiss);
+    section.appendChild(out);
+  }
+
+  if (opts.outcome === 'unknown') {
+    const out = h('div', { className: 'outcome outcome--unknown open' });
+    out.appendChild(h('span', {}, '\u26A0'));
+    out.appendChild(h('span', {}, 'Outcome unknown. No confirmation received from provider.'));
+    const dismiss = h('button', { className: 'outcome__dismiss', onClick: () => opts.onDismissOutcome?.() }, 'Dismiss');
+    out.appendChild(dismiss);
+    section.appendChild(out);
+  }
+
+  // Unknown outcome warning (always shown below details for accounts with resets)
+  if (acct.id === 'oai-astra' && !opts.outcome && !opts.showConfirm) {
+    const warn = h('div', { className: 'badge badge--warning', style: { marginTop: '8px', display: 'inline-flex' } }, '\u26A0 Previous redemption outcome unknown \u2014 acknowledge');
+    section.appendChild(warn);
+  }
+
+  return section;
+}
+
+function renderMobileAccount(acct) {
+  const row = h('div', { className: 'mobile-acct' });
+  const c = colorFor(acct.provider);
+
+  const header = h('div', { className: 'mobile-acct__header' });
+  header.appendChild(h('div', { className: 'mobile-acct__color', style: { background: c } }));
+  header.appendChild(h('span', { className: 'mobile-acct__name' }, acct.name));
+  if (acct.stale) {
+    header.appendChild(h('span', { className: 'badge badge--warning', style: { fontSize: '9px', padding: '1px 4px' } }, '\u26A0'));
+  }
+  header.appendChild(h('span', { className: 'mobile-acct__plan' }, acct.plan));
+  row.appendChild(header);
+
+  for (const win of acct.windows) {
+    const wRow = h('div', { className: 'mobile-acct__window' });
+    wRow.appendChild(h('span', { className: 'mobile-acct__window-label' }, win.label));
+    const bar = h('div', { className: 'mobile-acct__window-bar' });
+    const pct = win.remaining !== null ? win.remaining : 0;
+    bar.appendChild(h('div', {
+      className: 'mobile-acct__window-fill',
+      style: { width: pct + '%', background: c, opacity: acct.stale ? .5 : 1 },
+    }));
+    wRow.appendChild(bar);
+    wRow.appendChild(h('span', { className: 'mobile-acct__window-pct' }, win.remaining !== null ? win.remaining + '%' : '?'));
+    wRow.appendChild(h('span', { className: 'mobile-acct__window-reset' }, 'in ' + win.resetIn));
+    row.appendChild(wRow);
+  }
+
+  if (acct.balance.resets > 0) {
+    const bal = h('div', { className: 'mobile-acct__balance' });
+    bal.appendChild(h('span', {}, acct.balance.resets + ' reset available'));
+    row.appendChild(bal);
+  }
+
+  return row;
+}
+
+// ── Variant definitions ───────────────────────────────────────────
+
+const VARIANTS = [
+  {
+    name: 'Dark \u2014 standard view',
+    key: 'dark-standard',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      // Menu bar
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      // Popover
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      for (const acct of ACCOUNTS.slice(0, 3)) {
+        pop.appendChild(renderAccountCard(acct));
+      }
+      // Activity section
+      pop.appendChild(renderActivity('today'));
+      // Banked resets for OpenAI Sol
+      pop.appendChild(renderBankedResets(ACCOUNTS[2], { showCredits: false }));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Light \u2014 standard view',
+    key: 'light-standard',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'light');
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      for (const acct of ACCOUNTS.slice(0, 3)) {
+        pop.appendChild(renderAccountCard(acct));
+      }
+      pop.appendChild(renderActivity('today'));
+      pop.appendChild(renderBankedResets(ACCOUNTS[2], { showCredits: false }));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Dark \u2014 crowded menu bar (palette reuse)',
+    key: 'dark-crowded',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      // 9 accounts to force palette reuse
+      const crowded = [
+        ...ACCOUNTS,
+        { ...ACCOUNTS[0], id: 'anth-2', name: 'Anthropic Backup', windows: [{ label: '5-hour', remaining: 45, total: 100, resetIn: '1h 20m', resetTime: '12:40 PM' }] },
+        { ...ACCOUNTS[1], id: 'oai-2', name: 'OpenAI Team', windows: [{ label: '5-hour', remaining: 82, total: 100, resetIn: '3h 45m', resetTime: '3:05 PM' }] },
+        { ...ACCOUNTS[3], id: 'go-2', name: 'Go Kimi #2', windows: [{ label: '5-hour', remaining: 29, total: 100, resetIn: '18m', resetTime: '11:38 AM' }] },
+        { ...ACCOUNTS[4], id: 'go-3', name: 'Go DeepSeek', windows: [{ label: '5-hour', remaining: 67, total: 100, resetIn: '2h 55m', resetTime: '2:15 PM' }] },
+      ];
+      container.appendChild(renderMenuBar(crowded));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally \u2014 9 accounts (colors repeat after 6)')));
+      for (const acct of crowded) {
+        pop.appendChild(renderAccountCard(acct));
+      }
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Dark \u2014 no pins',
+    key: 'dark-no-pins',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      // Tally icon only, no pins
+      const bar = h('div', { className: 'menu-bar' });
+      bar.appendChild(h('div', { className: 'menu-bar__icon', style: { background: '#5b9a8b' } }, 'T'));
+      bar.appendChild(h('div', { className: 'menu-bar__spacer' }));
+      bar.appendChild(h('span', { className: 'menu-bar__time' }, 'Mon 11:20 AM'));
+      container.appendChild(bar);
+
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally \u2014 No pinned accounts')));
+      for (const acct of ACCOUNTS.slice(0, 2)) {
+        pop.appendChild(renderAccountCard(acct));
+      }
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Dark \u2014 stale and error states',
+    key: 'dark-stale-error',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      const mixed = [
+        ACCOUNTS[0],
+        STALE_ACCOUNT,
+        ERROR_ACCOUNT,
+        ACCOUNTS[2],
+      ];
+      container.appendChild(renderMenuBar(mixed));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally \u2014 Stale and error states')));
+      for (const acct of mixed) {
+        pop.appendChild(renderAccountCard(acct));
+      }
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Activity \u2014 Last 30 days',
+    key: 'dark-activity-30d',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      pop.appendChild(renderAccountCard(ACCOUNTS[0]));
+      pop.appendChild(renderActivity('last30days'));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Banked reset \u2014 confirmation flow',
+    key: 'dark-reset-confirm',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      pop.appendChild(renderAccountCard(ACCOUNTS[2]));
+      pop.appendChild(renderBankedResets(ACCOUNTS[2], {
+        showCredits: true,
+        showConfirm: true,
+      }));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Banked reset \u2014 outcome (success)',
+    key: 'dark-reset-success',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      pop.appendChild(renderAccountCard(ACCOUNTS[3]));
+      pop.appendChild(renderBankedResets(ACCOUNTS[3], { outcome: 'success' }));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Banked reset \u2014 unknown outcome warning',
+    key: 'dark-reset-unknown',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      container.appendChild(renderMenuBar(ACCOUNTS));
+      const pop = h('div', { className: 'popover' });
+      pop.appendChild(h('div', { className: 'popover__header' }, h('div', { className: 'popover__title' }, 'Tally')));
+      pop.appendChild(renderAccountCard(ACCOUNTS[3]));
+      pop.appendChild(renderBankedResets(ACCOUNTS[3], { outcome: 'unknown' }));
+      container.appendChild(pop);
+    },
+  },
+  {
+    name: 'Mobile \u2014 narrow overview',
+    key: 'mobile-overview',
+    render(container) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      const frame = h('div', { className: 'mobile-frame' });
+
+      // Status bar
+      const statusBar = h('div', { className: 'mobile-frame__status-bar' });
+      statusBar.appendChild(h('span', {}, '11:20'));
+      const notch = h('div', { className: 'mobile-frame__notch' });
+      notch.appendChild(h('div', { className: 'mobile-frame__notch-pill' }));
+      statusBar.appendChild(notch);
+      statusBar.appendChild(h('span', {}, '\u26A1 87%'));
+      frame.appendChild(statusBar);
+
+      const content = h('div', { className: 'mobile-frame__content' });
+      content.appendChild(h('div', { className: 'mobile-frame__title' }, 'Tally'));
+
+      // Account list
+      for (const acct of ACCOUNTS) {
+        content.appendChild(renderMobileAccount(acct));
+      }
+
+      // Mobile activity summary
+      const actSection = h('div', { className: 'mobile-activity' });
+      actSection.appendChild(h('div', { className: 'mobile-activity__title' }, 'Recorded OpenCode activity'));
+
+      const mTabs = h('div', { className: 'mobile-activity__tabs' });
+      mTabs.appendChild(h('button', { className: 'mobile-activity__tab active' }, 'Today'));
+      mTabs.appendChild(h('button', { className: 'mobile-activity__tab' }, 'Yesterday'));
+      mTabs.appendChild(h('button', { className: 'mobile-activity__tab' }, '30 days'));
+      actSection.appendChild(mTabs);
+
+      const mTotals = h('div', { className: 'mobile-totals' });
+      const t1 = h('div', { className: 'mobile-total' });
+      t1.appendChild(h('div', { className: 'mobile-total__label' }, 'Tokens'));
+      t1.appendChild(h('div', { className: 'mobile-total__value' }, '4.04B'));
+      mTotals.appendChild(t1);
+      const t2 = h('div', { className: 'mobile-total' });
+      t2.appendChild(h('div', { className: 'mobile-total__label' }, 'API-equivalent'));
+      t2.appendChild(h('div', { className: 'mobile-total__value' }, '$28.62'));
+      mTotals.appendChild(t2);
+      actSection.appendChild(mTotals);
+
+      // Mobile reset badge
+      const mResets = h('div', { className: 'mobile-resets' });
+      const mRow = h('div', { className: 'mobile-resets__row' });
+      mRow.appendChild(h('span', { className: 'mobile-resets__label' }, 'Banked resets'));
+      mRow.appendChild(h('span', { className: 'mobile-resets__count' }, '4 available'));
+      mResets.appendChild(mRow);
+      actSection.appendChild(mResets);
+
+      content.appendChild(actSection);
+      frame.appendChild(content);
+      container.appendChild(frame);
+    },
+  },
+];
+
+// ── Variant switcher ──────────────────────────────────────────────
+
+let currentVariant = 0;
+const page = document.getElementById('page');
+const label = document.getElementById('variant-label');
+
+function renderVariant(idx) {
+  currentVariant = (idx + VARIANTS.length) % VARIANTS.length;
+  const v = VARIANTS[currentVariant];
+  // Reset per-render color assignment
+  for (const k of Object.keys(providerColorIdx)) delete providerColorIdx[k];
+  page.innerHTML = '';
+  v.render(page);
+  label.textContent = v.name;
+}
+
+document.getElementById('prev').addEventListener('click', () => renderVariant(currentVariant - 1));
+document.getElementById('next').addEventListener('click', () => renderVariant(currentVariant + 1));
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') renderVariant(currentVariant - 1);
+  if (e.key === 'ArrowRight') renderVariant(currentVariant + 1);
+});
+
+// Init
+renderVariant(0);
+</script>
+
+</body>
+</html>

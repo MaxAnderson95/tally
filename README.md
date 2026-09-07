@@ -7,7 +7,7 @@ A personal macOS AI subscription usage tracker, planned for the menu bar, mobile
 
 Planning covers Anthropic, OpenAI, OpenCode Go, and xAI/Grok, including multiple accounts and OpenAI banked-reset redemption.
 
-An OpenCode companion plugin is planned for model-facing usage queries and reset redemption, TUI low-quota notifications, and usage advisories in model context. An in-TUI usage display is under investigation.
+An OpenCode companion plugin is planned for model-facing usage queries and reset redemption. Its tool description will encourage periodic usage checks.
 
 Provider viability findings are in [docs/RESEARCH.md](docs/RESEARCH.md).
 
