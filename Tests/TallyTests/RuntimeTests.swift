@@ -36,6 +36,118 @@ func fixture(_ name: String) throws -> Data {
     #expect(unknown[2].durationSeconds == nil)
 }
 
+@Test func anthropicNormalizesStructuredMetersAndExactMoney() throws {
+    var groups = AccountGroups()
+    for observation in try AnthropicUsage.decode(fixture("anthropic-usage")) { observation.apply(to: &groups, at: Date()) }
+    let windows = try #require(groups.quotas.data?.windows)
+    let expectedQuotas = try Wire.decoder().decode(Quotas.self, from: fixture("anthropic-quotas"))
+    #expect(try Wire.encoder().encode(groups.quotas.data) == Wire.encoder().encode(expectedQuotas))
+    #expect(windows.map(\.id) == ["session", "weekly_all", "weekly_scoped:fable", "weekly_scoped:sonnet", "daily"])
+    #expect(windows.map(\.usedPercent) == [20, 25, 40, 7, nil])
+    #expect(windows.filter(\.displayInOverview).map(\.label) == ["5-hour", "Weekly", "Fable", "daily"])
+    #expect(windows[2].scope == "model")
+    #expect(windows[2].modelId == nil)
+    #expect(windows[2].scopeNote?.contains("up to half") == true)
+    #expect(windows.last?.durationSeconds == nil)
+    #expect(groups.plan.data == nil)
+    #expect(groups.plan.observedAt == nil)
+    let expected = try Wire.decoder().decode(ExtraUsage.self, from: fixture("anthropic-extra"))
+    #expect(try Wire.encoder().encode(groups.extraUsage.data) == Wire.encoder().encode(expected))
+    #expect(try AnthropicUsage.decodePlan(Data(#"{"organization":{"organization_type":"claude_team","rate_limit_tier":"default_claude_max_5x"}}"#.utf8))?.name == "Team")
+    #expect(try AnthropicUsage.decodePlan(Data(#"{"organization":{"rate_limit_tier":"default_claude_max_5x"}}"#.utf8)) == nil)
+    #expect(try AnthropicUsage.decodePlan(Data(#"{"organization":{}}"#.utf8)) == nil)
+    #expect(throws: Fault.self) { try AnthropicUsage.decodePlan(Data(#"{"organization":{"organization_type":42}}"#.utf8)) }
+}
+
+@Test func anthropicExtraUsageStatesAndMalformedResponses() throws {
+    func extra(_ json: String) throws -> ExtraUsage? {
+        var groups = AccountGroups()
+        for observation in try AnthropicUsage.decode(Data(json.utf8)) { observation.apply(to: &groups, at: Date()) }
+        return groups.extraUsage.data
+    }
+    #expect(try extra(#"{"extra_usage":null}"#) == nil)
+    #expect(try extra(#"{"spend":{"enabled":false}}"#)?.presentation == "off")
+    #expect(try extra(#"{"spend":{"enabled":true,"used":null}}"#)?.presentation == "unavailable")
+    #expect(try extra(#"{"spend":{"used":{"amount_minor":0,"currency":"USD","exponent":2}}}"#)?.presentation == "unavailable")
+    for limit in ["null", #"{"amount_minor":0,"currency":"USD","exponent":2}"#, #"{"amount_minor":-1,"currency":"USD","exponent":2}"#, #"{"amount_minor":100,"currency":"EUR","exponent":2}"#] {
+        let result = try extra("{\"spend\":{\"enabled\":true,\"used\":{\"amount_minor\":0,\"currency\":\"USD\",\"exponent\":2},\"limit\":\(limit)}}")
+        #expect(result?.presentation == "used_only")
+        #expect(result?.used?.amount == "0")
+        #expect(result?.remainingPercent == nil)
+    }
+    let legacy = try extra(#"{"extra_usage":{"is_enabled":true,"used_credits":123.45,"monthly_limit":200}}"#)
+    #expect(legacy?.used?.amount == "1.2345")
+    #expect(legacy?.remaining?.amount == "0.7655")
+    #expect(legacy?.periodLabel == "Monthly")
+    #expect(try extra(#"{"extra_usage":{"is_enabled":false,"used_credits":0,"monthly_limit":0}}"#)?.presentation == "off")
+    for json in ["{}", "[]", #"{"error":"bad"}"#, #"{"five_hour":{"utilization":"bad"}}"#, #"{"five_hour":{"resets_at":"bad"}}"#, #"{"spend":{"used":{"amount_minor":1,"currency":"USD","exponent":-1}}}"#, #"{"limits":"bad"}"#] {
+        #expect(throws: Fault.self) { try extra(json) }
+    }
+}
+
+@Test func anthropicOwnerPreservesIndependentPlanAndScopedPins() async throws {
+    let owner = TallyOwner(clock: { Date(timeIntervalSince1970: 1_915_031_000) }, inventory: {
+        InventoryRead(databaseIdentity: "anthropic-db", credentials: [StoredCredential(storedID: "claude", name: "Claude", key: "secret", provider: "anthropic")])
+    }, collections: { _ in [
+        CollectionJob(id: "usage", groups: [.quotas, .extraUsage, .balances, .resetSummary, .resetDetails]) { try AnthropicUsage.decode(fixture("anthropic-usage")) },
+        CollectionJob(id: "profile", groups: [.plan]) { throw Fault("provider_unavailable", "Profile failed.") }
+    ] }, collect: { _ in throw Fault("unexpected", "Go is not used.") })
+    try await owner.refresh()
+    await owner.waitForCollection()
+    let account = try #require(await owner.snapshot().accounts.first)
+    #expect(account.groups.plan.stale)
+    #expect(account.groups.plan.error?.code == "provider_unavailable")
+    #expect(!account.groups.quotas.stale)
+    #expect(!account.groups.extraUsage.stale)
+    #expect(account.pin.lines.map(\.windowId) == ["session", "weekly_all"])
+    #expect(account.groups.quotas.data?.windows[2].remainingPercent == 60)
+    await owner.shutdown()
+}
+
+private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
+        #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+        #expect(request.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1.69")
+        let token = request.value(forHTTPHeaderField: "Authorization")
+        if token == "Bearer network" { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
+        let status = token == "Bearer rejected" ? 401 : token == "Bearer cooldown" ? 429 : 200
+        let data: Data
+        if token == "Bearer malformed" { data = Data("not json".utf8) }
+        else if request.url == AnthropicUsage.profileEndpoint { data = Data(#"{"organization":{"organization_type":"claude_pro"}}"#.utf8) }
+        else { data = (try? fixture("anthropic-usage")) ?? Data() }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Retry-After": "600"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Test func anthropicHTTPUsesStoredBearerAndSanitizesFailures() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [AnthropicProtocol.self]
+    let session = URLSession(configuration: config)
+    defer { session.invalidateAndCancel() }
+    let collector = AnthropicUsage(session: session)
+    #expect(try await collector.collect(access: "valid").count == 5)
+    var groups = AccountGroups()
+    for observation in try await collector.planJob(access: "valid").run() { observation.apply(to: &groups, at: Date()) }
+    #expect(groups.plan.data?.name == "Pro")
+    for (token, code) in [("rejected", "credentials_rejected"), ("cooldown", "provider_unavailable"), ("malformed", "provider_response_invalid"), ("network", "provider_unavailable")] {
+        do {
+            _ = try await collector.collect(access: token)
+            Issue.record("Expected a sanitized provider failure.")
+        } catch let fault as Fault {
+            #expect(fault.code == code)
+            if token == "cooldown" { #expect(fault.retryAt?.timeIntervalSinceNow ?? 0 > 590) }
+            #expect(!fault.message.contains("Bearer"))
+        }
+    }
+}
+
 @Test func discoversReadOnlyGoInventory() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

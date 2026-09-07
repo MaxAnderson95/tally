@@ -29,7 +29,11 @@ public actor TallyOwner {
         store = AccountIdentityStore(url: storageURL)
         let usage = GoUsage()
         collections = { credential in
-            credential.provider == "opencode-go" ? [.go { try await usage.collect(key: credential.key) }] : []
+            switch credential.provider {
+            case "opencode-go": [.go { try await usage.collect(key: credential.key) }]
+            case "anthropic": [AnthropicUsage().job(access: credential.key), AnthropicUsage().planJob(access: credential.key)]
+            default: []
+            }
         }
         scanActivity = { throw Fault("not_implemented", "Recorded activity scanning is not available in this slice.") }
         clock = { Date() }
@@ -63,7 +67,7 @@ public actor TallyOwner {
                     quotas.windows[index].derive(at: now, groupStale: account.groups.quotas.stale)
                 }
                 account.groups.quotas.data = quotas
-                account.pin.lines = quotas.windows.filter { $0.durationSeconds != nil }.prefix(2).map {
+                account.pin.lines = quotas.windows.filter { $0.durationSeconds != nil && $0.scope == "account" }.prefix(2).map {
                     PinLine(windowId: $0.id, label: $0.label, remainingPercent: $0.remainingPercent, stale: $0.stale)
                 }
                 account.pin.warning = account.pin.lines.contains { $0.stale }

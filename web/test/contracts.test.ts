@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { decodeAccounts, groupIsStale, percentage, resetLabel, scheduleLabel, type RefreshResponse } from '../src/api.ts'
+import { decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 
 test('Swift wire fixture retains unknown, measured zero, stale failure, and two pin lines', () => {
   const response = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8'))
@@ -23,6 +23,22 @@ test('Swift wire fixture retains unknown, measured zero, stale failure, and two 
 
 test('incompatible API requires update', () => {
   assert.throws(() => decodeAccounts('{"status":{"apiMajor":2}}'), /incompatible/)
+})
+
+test('Anthropic cards consume exact owner money and overview scope flags', () => {
+  const extra: ExtraUsage = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/anthropic-extra.json', import.meta.url), 'utf8'))
+  assert.equal(extra.presentation, 'bounded')
+  assert.equal(moneyLabel(extra.remaining), 'USD 8.75')
+  assert.equal(moneyLabel(extra.used), 'USD 1.25')
+  assert.equal(extra.remainingPercent, 87.5)
+  assert.equal(extra.used?.source.unit, 'amount_minor')
+  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  account.groups.quotas.data = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/anthropic-quotas.json', import.meta.url), 'utf8'))
+  assert.deepEqual(overviewWindows(account).map(window => window.id), ['session', 'weekly_all', 'weekly_scoped:fable', 'daily'])
+  assert.equal(account.groups.quotas.data!.windows.length, 5)
+  assert.match(overviewWindows(account)[2].scopeNote!, /up to half/)
+  assert.equal(overviewWindows(account)[2].usedPercent, 40)
+  assert.equal(overviewWindows(account)[2].modelId, null)
 })
 
 test('scheduling fixture distinguishes started, joined, cooldown, and credential block', () => {

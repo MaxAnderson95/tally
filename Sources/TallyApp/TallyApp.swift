@@ -187,7 +187,7 @@ struct AccountCard: View {
                     Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stale reading")
                 }
             }
-            let windows = account.groups.quotas.data?.windows ?? []
+            let windows = account.groups.quotas.data?.windows.filter(\.displayInOverview) ?? []
             if windows.isEmpty {
                 Text("?").font(.system(size: 30, weight: .semibold))
                 Text(account.groups.quotas.observedAt == nil ? "Quota unavailable" : "No quota windows reported").font(.caption)
@@ -219,6 +219,26 @@ struct AccountCard: View {
                     Text(timing(window)).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if account.provider == "anthropic" {
+                let extra = account.groups.extraUsage
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Extra usage")
+                        Spacer()
+                        Text(extraLabel(extra.data)).multilineTextAlignment(.trailing)
+                    }.font(.subheadline)
+                    if let data = extra.data, data.presentation == "bounded" {
+                        GeometryReader { geometry in
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(.secondary.opacity(0.15))
+                                Rectangle().fill(.primary).frame(width: geometry.size.width * (data.remainingPercent ?? 0) / 100)
+                            }
+                        }.frame(height: 4)
+                        Text("\(money(data.used)) used of \(money(data.limit))").font(.caption)
+                    }
+                    if extra.stale { Text("Extra usage stale").font(.caption) }
+                }
+            }
             DisclosureGroup("Details") {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     GridRow { Text("Observed"); Text(account.groups.quotas.observedAt?.formatted() ?? "Never") }
@@ -227,7 +247,22 @@ struct AccountCard: View {
                     GridRow { Text("Next attempt"); Text(account.groups.quotas.nextAttemptAt?.formatted() ?? "Not scheduled") }
                     GridRow { Text("Timezone"); Text(TimeZone.current.identifier) }
                     if let error = account.groups.quotas.error { GridRow { Text("Error"); Text(error.message) } }
+                    if account.provider == "anthropic" {
+                        GridRow { Text("Plan observed"); Text(account.groups.plan.observedAt?.formatted() ?? "Never") }
+                        GridRow { Text("Plan collection"); Text(account.groups.plan.refreshing ? "Refreshing" : account.groups.plan.stale ? "Stale" : "Current") }
+                        if let error = account.groups.plan.error { GridRow { Text("Plan error"); Text(error.message) } }
+                        GridRow { Text("Extra usage observed"); Text(account.groups.extraUsage.observedAt?.formatted() ?? "Never") }
+                        GridRow { Text("Extra usage attempt"); Text(account.groups.extraUsage.lastAttemptAt?.formatted() ?? "Never") }
+                        GridRow { Text("Extra usage next"); Text(account.groups.extraUsage.nextAttemptAt?.formatted() ?? "Not scheduled") }
+                        GridRow { Text("Extra usage collection"); Text(account.groups.extraUsage.refreshing ? "Refreshing" : account.groups.extraUsage.stale ? "Stale" : "Current") }
+                        if let error = account.groups.extraUsage.error { GridRow { Text("Extra usage error"); Text(error.message) } }
+                        if let used = account.groups.extraUsage.data?.used {
+                            GridRow { Text("Extra usage source"); Text("\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")") }
+                        }
+                    }
                     ForEach(windows) { window in
+                        GridRow { Text("\(window.label) scope"); Text(window.scopeNote ?? window.scope) }
+                        GridRow { Text("Used"); Text(percent(window.usedPercent)) }
                         GridRow { Text("\(window.label) reset"); Text(window.resetAt?.formatted() ?? "Unavailable") }
                         GridRow { Text("Pacing"); Text(window.pacing.map { "\($0.projectedUsedPercent.formatted(.number.precision(.fractionLength(0))))% projected at reset" } ?? window.pacingUnavailableReason ?? "Unavailable") }
                     }
@@ -235,7 +270,16 @@ struct AccountCard: View {
             }.font(.caption)
         }.padding(16).background(.background, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.2)))
     }
-    private func percent(_ number: Double?) -> String { number.map { "\(Int($0.rounded()))%" } ?? "?" }
+    private func percent(_ number: Double?) -> String { number.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "?" }
+    private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
+    private func extraLabel(_ extra: ExtraUsage?) -> String {
+        switch extra?.presentation {
+        case "off": "Off"
+        case "used_only": "\(money(extra?.used)) used"
+        case "bounded": "\(money(extra?.remaining)) remaining"
+        default: "Unavailable"
+        }
+    }
     private func timing(_ window: QuotaWindow) -> String {
         let duration = window.durationSeconds == nil ? "Duration unknown. " : ""
         if window.resetState == "passed" { return duration + "Reset time passed; awaiting update" }

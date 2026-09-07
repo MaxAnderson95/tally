@@ -18,10 +18,21 @@ export type Account = {
   pin: { lines: { windowId: string; label: string; remainingPercent: number | null; stale: boolean }[]; warning: boolean }
   groups: {
     plan: Group<{ name: string }>; quotas: Group<{ windows: QuotaWindow[] }>
-    extraUsage: Group<unknown>; balances: Group<unknown>; resetSummary: Group<unknown>; resetDetails: Group<unknown>
+    extraUsage: Group<ExtraUsage>; balances: Group<unknown>; resetSummary: Group<unknown>; resetDetails: Group<unknown>
   }
   command: { blockingOperationId: string | null; state: 'pending' | 'unknown' | null; acknowledgementRequired: boolean }
 }
+export type Money = {
+  amount: string; currency: string; provenance: 'provider' | 'reference_conversion'
+  source: { amount: string; unit: string; exponent: number | null }
+}
+export type ExtraUsage = {
+  enabled: boolean | null; used: Money | null; limit: Money | null; remaining: Money | null
+  remainingPercent: number | null; periodLabel: string | null
+  presentation: 'off' | 'used_only' | 'bounded' | 'unavailable'
+}
+export const moneyLabel = (money: Money | null) => money ? `${money.currency} ${money.amount}` : 'Unavailable'
+export const overviewWindows = (account: Account) => account.groups.quotas.data?.windows.filter(window => window.displayInOverview) ?? []
 export type Status = {
   apiMajor: 1; appBuild: string; serverTime: string; timezone: string; owner: 'ready' | 'shutting_down'
   inventory: Group<{ count: number; namespaceId: string }>

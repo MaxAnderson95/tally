@@ -104,7 +104,7 @@ public struct AbsentData: Codable, Sendable {}
 public struct AccountGroups: Codable, Sendable {
     public var plan = Group<Plan>()
     public var quotas = Group<Quotas>()
-    public var extraUsage = Group<AbsentData>()
+    public var extraUsage = Group<ExtraUsage>()
     public var balances = Group<AbsentData>()
     public var resetSummary = Group<AbsentData>()
     public var resetDetails = Group<AbsentData>()

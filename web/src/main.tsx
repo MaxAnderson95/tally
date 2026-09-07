@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { decodeAccounts, groupIsStale, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
+import { decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
 import './style.css'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
-  const windows = quota.data?.windows ?? []
+  const windows = overviewWindows(account)
+  const extra = account.groups.extraUsage
   const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   return <article className="account">
@@ -24,6 +25,14 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       </div>
       <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>
     </section>)}
+    {account.provider === 'anthropic' && <section className="quota" aria-label="Extra usage">
+      <div className="window-heading"><span>Extra usage</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
+      {extra.data?.presentation === 'bounded' && <>
+        <div className="bar" aria-label={`${percentage(extra.data.remainingPercent)} remaining`}><div style={{ width: `${extra.data.remainingPercent}%` }} /></div>
+        <p className="timing">{moneyLabel(extra.data.used)} used of {moneyLabel(extra.data.limit)}</p>
+      </>}
+      {(disconnected || groupIsStale(extra)) && <p className="timing">Extra usage stale</p>}
+    </section>}
     <details><summary>Details</summary><dl>
       <dt>Observed</dt><dd>{exact(quota.observedAt)}</dd>
       <dt>Last attempt</dt><dd>{exact(quota.lastAttemptAt)}</dd>
@@ -31,7 +40,19 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       <dt>Next attempt</dt><dd>{quota.nextAttemptAt ? exact(quota.nextAttemptAt) : 'Not scheduled'}</dd>
       <dt>Timezone</dt><dd>{timezone}</dd>
       {quota.error && <><dt>Error</dt><dd>{quota.error.message}</dd></>}
+      {account.provider === 'anthropic' && <>
+        <dt>Plan observed</dt><dd>{exact(account.groups.plan.observedAt)}</dd>
+        <dt>Plan collection</dt><dd>{account.groups.plan.refreshing ? 'Refreshing' : groupIsStale(account.groups.plan) ? 'Stale' : 'Current'}</dd>
+        {account.groups.plan.error && <><dt>Plan error</dt><dd>{account.groups.plan.error.message}</dd></>}
+        <dt>Extra usage observed</dt><dd>{exact(extra.observedAt)}</dd>
+        <dt>Extra usage attempt</dt><dd>{exact(extra.lastAttemptAt)}</dd>
+        <dt>Extra usage next</dt><dd>{exact(extra.nextAttemptAt)}</dd>
+        <dt>Extra usage collection</dt><dd>{extra.refreshing ? 'Refreshing' : disconnected || groupIsStale(extra) ? 'Stale' : 'Current'}</dd>
+        {extra.error && <><dt>Extra usage error</dt><dd>{extra.error.message}</dd></>}
+        <dt>Extra usage source</dt><dd>{extra.data?.used ? `${extra.data.used.source.amount} ${extra.data.used.source.unit}; exponent ${extra.data.used.source.exponent ?? 'unknown'}` : 'Unavailable'}</dd>
+      </>}
       {windows.map(window => <div className="detail-window" key={window.id}>
+        <dt>{window.label} scope</dt><dd>{window.scopeNote ?? window.scope}</dd>
         <dt>{window.label} used</dt><dd>{percentage(window.usedPercent)}</dd>
         <dt>Exact reset</dt><dd>{exact(window.resetAt)}</dd>
         <dt>Pacing</dt><dd>{window.pacing ? `${Math.round(window.pacing.projectedUsedPercent)}% projected at reset` : window.pacingUnavailableReason}</dd>

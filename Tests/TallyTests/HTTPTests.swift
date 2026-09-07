@@ -109,3 +109,30 @@ private struct AuthorityResponder: HTTPResponder {
     freshTask.cancel()
     _ = await freshTask.result
 }
+
+@Test func anthropicRESTMatchesNativeOwnerReadings() async throws {
+    let owner = TallyOwner(clock: { Date(timeIntervalSince1970: 1_915_031_000) }, inventory: {
+        InventoryRead(databaseIdentity: "anthropic-db", credentials: [StoredCredential(storedID: "claude", name: "Fixture Claude", key: "private-key", provider: "anthropic")])
+    }, collections: { _ in [CollectionJob(id: "usage", groups: [.quotas, .extraUsage, .balances, .resetSummary, .resetDetails]) {
+        try AnthropicUsage.decode(fixture("anthropic-usage"))
+    }] }, collect: { _ in throw Fault("unexpected", "No Go request expected.") })
+    try await owner.refresh()
+    await owner.waitForCollection()
+    let native = await owner.snapshot()
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("Tally".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    try await app.test(.router) { client in
+        try await client.execute(uri: "/api/v1/accounts", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+            let data = Data(response.body.readableBytesView)
+            #expect(data == (try Wire.encoder().encode(native)))
+            let account = try #require(Wire.decoder().decode(AccountsResponse.self, from: data).accounts.first)
+            #expect(account.groups.quotas.data?.windows.filter { !$0.displayInOverview }.map(\.id) == ["weekly_scoped:sonnet"])
+            #expect(account.groups.extraUsage.data?.remaining?.amount == "8.75")
+            #expect(!String(decoding: data, as: UTF8.self).contains("private-key"))
+        }
+    }
+    await owner.shutdown()
+}
