@@ -7,7 +7,7 @@ A personal macOS AI subscription usage tracker for the menu bar, mobile web, and
 
 The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Recorded activity has reviewed API-equivalent estimates. The shared owner and REST support durable reset commands; native/web confirmation controls and the companion follow separately.
 
-An OpenCode companion plugin is planned for model-facing usage queries and reset redemption. Its tool description will encourage periodic usage checks.
+The independently installed [OpenCode companion](companion/README.md) registers one `tally` model tool for status, Account list/detail, activity and refresh queries. Its description encourages periodic usage checks. It supports REST API major 1 and an optional personal-tailnet base URL.
 
 Provider viability findings are in [docs/RESEARCH.md](docs/RESEARCH.md).
 
