@@ -239,6 +239,7 @@ struct AccountCard: View {
                     if extra.stale { Text("Extra usage stale").font(.caption) }
                 }
             }
+            if account.provider == "openai" { OpenAICreditDetails(account: account) }
             DisclosureGroup("Details") {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     GridRow { Text("Observed"); Text(account.groups.quotas.observedAt?.formatted() ?? "Never") }

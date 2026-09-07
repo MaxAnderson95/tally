@@ -1,7 +1,26 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+
+test('OpenAI shared normalized credits preserve provenance, zero, null, and expiry states', () => {
+  const reading: { quotas: { windows: QuotaWindow[] }; balances: { items: Balance[] }; details: { credits: Credit[]; summary: ResetSummary } } = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/openai-readings.json', import.meta.url), 'utf8'))
+  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  account.groups.quotas.data = reading.quotas
+  assert.deepEqual(overviewWindows(account).map(window => window.label), ['Weekly'])
+  assert.deepEqual(reading.quotas.windows.map(window => window.durationSeconds), [7200,604800,null])
+  assert.equal(balanceLabel(reading.balances.items[0]), '12.5 credits (USD 0.5, reference-derived)')
+  assert.equal(reading.balances.items[0].money, null)
+  assert.equal(reading.balances.items[0].referenceValue?.provenance, 'reference_conversion')
+  assert.equal(resetCountLabel(reading.details.summary), '2 reset credits')
+  assert.equal(reading.details.summary.applicableAvailableCount, null)
+  assert.equal(resetCountLabel({ ...reading.details.summary, availableCount: 0 }), '0 reset credits')
+  assert.equal(resetCountLabel(null), 'Reset count unavailable')
+  assert.equal(creditExpiryLabel(reading.details.credits[1], 'America/New_York'), 'Does not expire')
+  assert.equal(creditExpiryLabel(reading.details.credits[2], 'America/New_York'), 'Expiry unknown')
+  assert.match(creditExpiryLabel(reading.details.credits[0], 'America/New_York'), /2030/)
+  assert.deepEqual(reading.details.credits.map(credit => credit.available), [true, true, null, false])
+})
 
 test('Swift wire fixture retains unknown, measured zero, stale failure, and two pin lines', () => {
   const response = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8'))

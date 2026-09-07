@@ -105,9 +105,9 @@ public struct AccountGroups: Codable, Sendable {
     public var plan = Group<Plan>()
     public var quotas = Group<Quotas>()
     public var extraUsage = Group<ExtraUsage>()
-    public var balances = Group<AbsentData>()
-    public var resetSummary = Group<AbsentData>()
-    public var resetDetails = Group<AbsentData>()
+    public var balances = Group<Balances>()
+    public var resetSummary = Group<ResetSummary>()
+    public var resetDetails = Group<ResetDetails>()
 }
 public struct PinLine: Codable, Sendable {
     public var windowId: String

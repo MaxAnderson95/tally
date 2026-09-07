@@ -29,10 +29,12 @@ public actor TallyOwner {
         store = AccountIdentityStore(url: storageURL)
         let usage = GoUsage()
         let anthropic = AnthropicUsage()
+        let openai = OpenAIUsage()
         collections = { credential in
             switch credential.provider {
             case "opencode-go": [.go { try await usage.collect(key: credential.key) }]
             case "anthropic": [anthropic.job(access: credential.key), anthropic.planJob(access: credential.key)]
+            case "openai": openai.jobs(access: credential.key, workspace: credential.workspace)
             default: []
             }
         }
@@ -63,6 +65,7 @@ public actor TallyOwner {
             account.groups.plan.age(at: now); account.groups.quotas.age(at: now)
             account.groups.extraUsage.age(at: now); account.groups.balances.age(at: now)
             account.groups.resetSummary.age(at: now); account.groups.resetDetails.age(at: now)
+            if account.provider == "openai" { account.groups.selectResetSummary() }
             if var quotas = account.groups.quotas.data {
                 for index in quotas.windows.indices {
                     quotas.windows[index].derive(at: now, groupStale: account.groups.quotas.stale)

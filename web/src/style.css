@@ -32,6 +32,9 @@ dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap:
 dt { color: var(--muted); }
 dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 .detail-window { display: contents; }
+.reset-credits > summary { display: list-item; width: fit-content; border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; color: inherit; }
+.reset-credits p { margin-top: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.reset-credits h3 { font-size: 13px; margin: 16px 0 8px; overflow-wrap: anywhere; }
 .notice { padding: 12px; border: 1px solid var(--line); margin-bottom: 18px; font-size: 13px; }
 @media (max-width: 999px) { main { max-width: 560px; } .accounts { grid-template-columns: 1fr; } }
 @media (max-width: 400px) { main { padding: 22px 12px; } .account { padding: 16px; } }

@@ -36,7 +36,7 @@ enum ReadingGroup: String, CaseIterable, Sendable {
 }
 
 enum GroupObservation: Sendable {
-    case plan(Plan?), quotas(Quotas?), extraUsage(ExtraUsage?), balances(AbsentData?), resetSummary(AbsentData?), resetDetails(AbsentData?)
+    case plan(Plan?), quotas(Quotas?), extraUsage(ExtraUsage?), balances(Balances?), resetSummary(ResetSummary?), resetDetails(ResetDetails?)
 
     var group: ReadingGroup {
         switch self {

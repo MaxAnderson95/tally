@@ -18,7 +18,7 @@ export type Account = {
   pin: { lines: { windowId: string; label: string; remainingPercent: number | null; stale: boolean }[]; warning: boolean }
   groups: {
     plan: Group<{ name: string }>; quotas: Group<{ windows: QuotaWindow[] }>
-    extraUsage: Group<ExtraUsage>; balances: Group<unknown>; resetSummary: Group<unknown>; resetDetails: Group<unknown>
+    extraUsage: Group<ExtraUsage>; balances: Group<{ items: Balance[] }>; resetSummary: Group<ResetSummary>; resetDetails: Group<{ credits: Credit[]; summary: ResetSummary }>
   }
   command: { blockingOperationId: string | null; state: 'pending' | 'unknown' | null; acknowledgementRequired: boolean }
 }
@@ -26,6 +26,16 @@ export type Money = {
   amount: string; currency: string; provenance: 'provider' | 'reference_conversion'
   source: { amount: string; unit: string; exponent: number | null }
 }
+export type Balance = { unit: string; quantity: string | null; money: Money | null; referenceValue: Money | null; unlimited: boolean | null }
+export type ResetSummary = { availableCount: number | null; applicableAvailableCount: number | null; source: 'usage' | 'credit_details' }
+export type Credit = {
+  id: string; type: string | null; status: string | null; available: boolean | null
+  title: string | null; description: string | null; grantedAt: string | null
+  expiry: { kind: 'at'; at: string } | { kind: 'none' | 'unknown'; at: null }
+}
+export const balanceLabel = (balance: Balance) => balance.unlimited === true ? `Unlimited ${balance.unit}` : `${balance.quantity ?? 'Unknown'} ${balance.unit}${balance.referenceValue ? ` (${moneyLabel(balance.referenceValue)}, reference-derived)` : ''}`
+export const resetCountLabel = (summary: ResetSummary | null) => summary?.availableCount == null ? 'Reset count unavailable' : `${summary.availableCount} reset credits`
+export const creditExpiryLabel = (credit: Credit, timezone: string) => credit.expiry.kind === 'at' ? new Date(credit.expiry.at).toLocaleString(undefined, { timeZone: timezone }) : credit.expiry.kind === 'none' ? 'Does not expire' : 'Expiry unknown'
 export type ExtraUsage = {
   enabled: boolean | null; used: Money | null; limit: Money | null; remaining: Money | null
   remainingPercent: number | null; periodLabel: string | null

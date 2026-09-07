@@ -1,0 +1,10 @@
+{
+  "plan_type": "self_serve_business_prolite",
+  "rate_limit": {"primary_window": {"used_percent": 100, "limit_window_seconds": 604800, "reset_at": 1915200000}},
+  "additional_rate_limits": [
+    {"limit_name": "Spark", "metered_feature": "spark", "normal_model_slug": "spark-model", "rate_limit": {"primary_window": {"used_percent": 25, "limit_window_seconds": 7200, "reset_after_seconds": 3600}}},
+    {"limit_name": "Reserve", "metered_feature": "reserve", "rate_limit": {"secondary_window": {"used_percent": null}}}
+  ],
+  "credits": {"balance": "12.5", "has_credits": true, "unlimited": false},
+  "rate_limit_reset_credits": {"available_count": 3, "applicable_available_count": 0}
+}

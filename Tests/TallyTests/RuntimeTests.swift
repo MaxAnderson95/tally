@@ -7,6 +7,116 @@ func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!)
 }
 
+@Test func openAIMapsActualDurationsHiddenScopesAndCreditProvenance() throws {
+    struct Expected: Decodable { var balances: Balances; var details: ResetDetails; var quotas: Quotas }
+    let expected = try Wire.decoder().decode(Expected.self, from: fixture("openai-readings"))
+    var groups = AccountGroups()
+    let now = Date(timeIntervalSince1970: 1_915_031_000)
+    for observation in try OpenAIUsage.decodeUsage(fixture("openai-usage"), at: now) { observation.apply(to: &groups, at: now) }
+    let windows = try #require(groups.quotas.data?.windows)
+    #expect(windows.map(\.durationSeconds) == [7200, 604800, nil])
+    #expect(windows.filter(\.displayInOverview).map(\.label) == ["Weekly"])
+    #expect(windows[0].resetAt == now.addingTimeInterval(3600))
+    #expect(windows[0].modelId == "spark-model")
+    #expect(groups.plan.data?.name == "Business Premium")
+    #expect(groups.resetSummary.data?.availableCount == 3)
+    #expect(groups.resetSummary.data?.applicableAvailableCount == 0)
+    #expect(try Wire.encoder().encode(groups.quotas.data) == Wire.encoder().encode(expected.quotas))
+    #expect(try Wire.encoder().encode(groups.balances.data) == Wire.encoder().encode(expected.balances))
+    #expect(try Wire.encoder().encode(OpenAIUsage.decodeCredits(fixture("openai-credits"))) == Wire.encoder().encode(expected.details))
+}
+
+@Test func openAISummarySelectsWholeIndependentObservations() throws {
+    var groups = AccountGroups()
+    let start = Date(timeIntervalSince1970: 1000)
+    groups.resetSummary.succeed(ResetSummary(availableCount: 3, applicableAvailableCount: 0, source: "usage"), at: start)
+    groups.resetDetails.succeed(try OpenAIUsage.decodeCredits(fixture("openai-credits")), at: start.addingTimeInterval(1))
+    var view = groups
+    view.selectResetSummary()
+    #expect(view.resetSummary.data?.source == "credit_details")
+    #expect(view.resetSummary.data?.availableCount == 2)
+    #expect(view.resetSummary.data?.applicableAvailableCount == nil)
+    #expect(view.resetSummary.observedAt == groups.resetDetails.observedAt)
+    groups.resetDetails.fail(Fault("provider_unavailable", "List failed"), at: start.addingTimeInterval(120))
+    groups.resetSummary.succeed(ResetSummary(availableCount: 0, source: "usage"), at: start.addingTimeInterval(121))
+    view = groups; view.selectResetSummary()
+    #expect(view.resetSummary.data?.availableCount == 0)
+    #expect(view.resetSummary.data?.source == "usage")
+    #expect(!view.resetSummary.stale)
+    #expect(view.resetDetails.stale)
+    #expect(view.resetDetails.observedAt == start.addingTimeInterval(1))
+    groups.resetSummary.fail(Fault("provider_unavailable", "Usage failed"), at: start.addingTimeInterval(240))
+    groups.resetDetails.succeed(try OpenAIUsage.decodeCredits(Data(#"{"available_count":null,"credits":[]}"#.utf8)), at: start.addingTimeInterval(241))
+    view = groups; view.selectResetSummary()
+    #expect(view.resetSummary.data?.availableCount == nil)
+    #expect(view.resetSummary.data?.source == "credit_details")
+    #expect(!view.resetSummary.stale)
+}
+
+@Test func openAICreditsPreserveAbsenceUnlimitedAndRejectMalformed() throws {
+    func balance(_ json: String) throws -> Balance? {
+        var groups = AccountGroups()
+        for observation in try OpenAIUsage.decodeUsage(Data(json.utf8), at: Date()) { observation.apply(to: &groups, at: Date()) }
+        return groups.balances.data?.items.first
+    }
+    #expect(try balance(#"{"credits":null}"#) == nil)
+    #expect(try balance(#"{"credits":{"unlimited":true}}"#)?.unlimited == true)
+    #expect(try balance(#"{"credits":{"unlimited":true}}"#)?.quantity == nil)
+    #expect(try balance(#"{"credits":{"has_credits":false}}"#)?.quantity == "0")
+    #expect(try balance(#"{"credits":{}}"#)?.quantity == nil)
+    for json in ["{}", #"{"credits":{"balance":"bad"}}"#, #"{"credits":{"balance":"12bad"}}"#, #"{"rate_limit":{"primary_window":{"used_percent":"bad"}}}"#] {
+        #expect(throws: Fault.self) { try balance(json) }
+    }
+    #expect(throws: Fault.self) { try OpenAIUsage.decodeCredits(Data(#"{"credits":null}"#.utf8)) }
+    #expect(throws: Fault.self) { try OpenAIUsage.decodeCredits(Data(#"{"available_count":-1,"credits":[]}"#.utf8)) }
+    for expiry in [#""bad""#, "42", "{}"] {
+        let details = try OpenAIUsage.decodeCredits(Data("{\"credits\":[{\"id\":\"unknown\",\"expires_at\":\(expiry)}]}".utf8))
+        #expect(details.credits[0].expiry.kind == "unknown")
+        #expect(details.credits[0].available == nil)
+    }
+}
+
+private final class OpenAIProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        #expect(request.httpMethod == "GET")
+        #expect(request.httpBody == nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer shared")
+        let workspace = request.value(forHTTPHeaderField: "ChatGPT-Account-Id")
+        #expect(["personal", "work"].contains(workspace))
+        #expect([OpenAIUsage.endpoint, OpenAIUsage.creditsEndpoint].contains(request.url))
+        let json = request.url == OpenAIUsage.creditsEndpoint ? "{\"available_count\":\(workspace == "work" ? 0 : 2),\"credits\":[]}" : "{\"rate_limit\":{\"primary_window\":{\"used_percent\":\(workspace == "work" ? 100 : 20),\"limit_window_seconds\":604800}}}"
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Test func openAIWorkspacesNeverShareUsageOrDetails() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [OpenAIProtocol.self]
+    let client = OpenAIUsage(session: URLSession(configuration: config))
+    let owner = TallyOwner(clock: { Date() }, inventory: {
+        InventoryRead(databaseIdentity: "openai-db", credentials: [
+            StoredCredential(storedID: "p", name: "Personal", key: "shared", provider: "openai", workspace: "personal"),
+            StoredCredential(storedID: "w", name: "Work", key: "shared", provider: "openai", workspace: "work")
+        ])
+    }, collections: { client.jobs(access: $0.key, workspace: $0.workspace) }, collect: { _ in throw Fault("unexpected", "Go is not used") })
+    try await owner.refresh(); await owner.waitForCollection()
+    let accounts = await owner.snapshot().accounts
+    #expect(accounts.count == 2)
+    #expect(accounts.map { $0.groups.quotas.data?.windows.first?.usedPercent } == [20, 100])
+    #expect(accounts.map { $0.groups.resetSummary.data?.availableCount } == [2, 0])
+    #expect(accounts.allSatisfy { $0.groups.resetSummary.data?.source == "credit_details" })
+    for job in client.jobs(access: "shared", workspace: nil) {
+        do { _ = try await job.run(); Issue.record("Missing workspace sent a request") }
+        catch let fault as Fault { #expect(fault.code == "credentials_unavailable") }
+    }
+    await owner.shutdown()
+}
+
 @Test func decodesSharedWireFixture() throws {
     let refresh = try Wire.decoder().decode(RefreshResponse.self, from: fixture("refresh"))
     #expect(refresh.accounts.map { $0.schedule.state } == ["started", "joined", "deferred", "blocked"])

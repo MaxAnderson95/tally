@@ -110,10 +110,16 @@ private struct AuthorityResponder: HTTPResponder {
     _ = await freshTask.result
 }
 
-@Test func anthropicRESTMatchesNativeOwnerReadings() async throws {
+@Test(arguments: ["anthropic", "openai"]) func providerRESTMatchesNativeOwnerReadings(provider: String) async throws {
     let owner = TallyOwner(clock: { Date(timeIntervalSince1970: 1_915_031_000) }, inventory: {
-        InventoryRead(databaseIdentity: "anthropic-db", credentials: [StoredCredential(storedID: "claude", name: "Fixture Claude", key: "private-key", provider: "anthropic")])
-    }, collections: { _ in [CollectionJob(id: "usage", groups: [.quotas, .extraUsage, .balances, .resetSummary, .resetDetails]) {
+        InventoryRead(databaseIdentity: "provider-db", credentials: [StoredCredential(storedID: "provider", name: "Fixture Account", key: "private-key", provider: provider)])
+    }, collections: { _ in
+        if provider == "openai" {
+            return [CollectionJob(id: "usage", groups: [.plan, .quotas, .extraUsage, .balances, .resetSummary]) {
+                try OpenAIUsage.decodeUsage(fixture("openai-usage"), at: Date(timeIntervalSince1970: 1_915_031_000))
+            }, CollectionJob(id: "credits", groups: [.resetDetails]) { [.resetDetails(try OpenAIUsage.decodeCredits(fixture("openai-credits")))] }]
+        }
+        return [CollectionJob(id: "usage", groups: [.quotas, .extraUsage, .balances, .resetSummary, .resetDetails]) {
         try AnthropicUsage.decode(fixture("anthropic-usage"))
     }] }, collect: { _ in throw Fault("unexpected", "No Go request expected.") })
     try await owner.refresh()
@@ -129,8 +135,16 @@ private struct AuthorityResponder: HTTPResponder {
             let data = Data(response.body.readableBytesView)
             #expect(data == (try Wire.encoder().encode(native)))
             let account = try #require(Wire.decoder().decode(AccountsResponse.self, from: data).accounts.first)
-            #expect(account.groups.quotas.data?.windows.filter { !$0.displayInOverview }.map(\.id) == ["weekly_scoped:sonnet"])
-            #expect(account.groups.extraUsage.data?.remaining?.amount == "8.75")
+            if provider == "anthropic" {
+                #expect(account.groups.quotas.data?.windows.filter { !$0.displayInOverview }.map(\.id) == ["weekly_scoped:sonnet"])
+                #expect(account.groups.extraUsage.data?.remaining?.amount == "8.75")
+            } else {
+                #expect(account.groups.quotas.data?.windows.filter(\.displayInOverview).map(\.label) == ["Weekly"])
+                #expect(account.groups.resetSummary.data?.source == "credit_details")
+                #expect(account.groups.resetSummary.data?.applicableAvailableCount == nil)
+                #expect(account.groups.resetDetails.data?.credits.map(\.expiry.kind) == ["at", "none", "unknown", "at"])
+                #expect(account.groups.balances.data?.items.first?.referenceValue?.provenance == "reference_conversion")
+            }
             #expect(!String(decoding: data, as: UTF8.self).contains("private-key"))
         }
     }

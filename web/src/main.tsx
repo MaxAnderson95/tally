@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
 import './style.css'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
@@ -33,6 +33,42 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       </>}
       {(disconnected || groupIsStale(extra)) && <p className="timing">Extra usage stale</p>}
     </section>}
+    {account.provider === 'openai' && <>
+      <section className="quota" aria-label="Purchased credits">
+        <div className="window-heading"><span>Purchased credits</span><strong>{account.groups.balances.data?.items.map(balanceLabel).join(', ') ?? 'Unavailable'}</strong></div>
+        {(disconnected || groupIsStale(account.groups.balances)) && <p className="timing">Purchased credits stale</p>}
+      </section>
+      <details className="reset-credits"><summary>{resetCountLabel(account.groups.resetSummary.data)}{(disconnected || groupIsStale(account.groups.resetSummary)) && ' (stale)'}</summary>
+        <p>Reset credits for {account.name}</p>
+        <p>Redeeming consumes one credit; the provider decides which windows reset.</p>
+        <dl>
+          <dt>Available</dt><dd>{account.groups.resetSummary.data?.availableCount ?? 'Unavailable'}</dd>
+          <dt>Provider-applicable</dt><dd>{account.groups.resetSummary.data?.applicableAvailableCount ?? 'Not reported'}</dd>
+          <dt>Count source</dt><dd>{account.groups.resetSummary.data?.source ?? 'Unavailable'}</dd>
+          <dt>Timezone</dt><dd>{timezone}</dd>
+          {(['resetSummary', 'resetDetails', 'balances'] as const).map(key => {
+            const group = account.groups[key]
+            const label = { resetSummary: 'Count', resetDetails: 'Credit list', balances: 'Purchased credits' }[key]
+            return <div className="detail-window" key={key}>
+              <dt>{label} observed</dt><dd>{exact(group.observedAt)}</dd>
+              <dt>{label} attempt</dt><dd>{exact(group.lastAttemptAt)}</dd>
+              <dt>{label} collection</dt><dd>{group.refreshing ? 'Refreshing' : disconnected || groupIsStale(group) ? 'Stale' : 'Current'}</dd>
+              <dt>{label} next</dt><dd>{exact(group.nextAttemptAt)}</dd>
+              {group.error && <><dt>{label} error</dt><dd>{group.error.message}</dd></>}
+            </div>
+          })}
+        </dl>
+        <p>Dollar comparisons use a reference rate of USD 0.04 per purchased credit, not provider-reported cash.</p>
+        {account.groups.resetDetails.data === null ? <p>Credit list unavailable</p> : account.groups.resetDetails.data.credits.length === 0 ? <p>No reset credits reported</p> : account.groups.resetDetails.data.credits.map(credit => <section key={credit.id}>
+          <h3>{credit.title ?? 'Reset credit'}</h3><dl>
+            <dt>Credit ID</dt><dd>{credit.id}</dd><dt>Type</dt><dd>{credit.type ?? 'Unknown'}</dd>
+            <dt>Status</dt><dd>{credit.status ?? 'Unknown'}</dd><dt>Available</dt><dd>{credit.available === null ? 'Unknown' : credit.available ? 'Yes' : 'No'}</dd>
+            <dt>Granted</dt><dd>{exact(credit.grantedAt)}</dd><dt>Expiry</dt><dd>{creditExpiryLabel(credit, timezone)}</dd>
+            {credit.description && <><dt>Description</dt><dd>{credit.description}</dd></>}
+          </dl>
+        </section>)}
+      </details>
+    </>}
     <details><summary>Details</summary><dl>
       <dt>Observed</dt><dd>{exact(quota.observedAt)}</dd>
       <dt>Last attempt</dt><dd>{exact(quota.lastAttemptAt)}</dd>
