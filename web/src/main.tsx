@@ -3,14 +3,14 @@ import { createRoot } from 'react-dom/client'
 import { decodeAccounts, percentage, resetLabel, type Account, type AccountsResponse } from './api'
 import './style.css'
 
-function GoCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
+function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
   const windows = quota.data?.windows ?? []
   const stale = quota.stale || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   return <article className="account">
     <header className="account-heading">
-      <svg className="logo" viewBox="0 0 24 24" aria-label="OpenCode Go" role="img"><path fill="currentColor" fillRule="evenodd" d="M3 3h18v18H3V3zm4 4v10h10V7H7zm6 2h2v6h-2V9z" /></svg>
+      {account.provider === 'opencode-go' ? <svg className="logo" viewBox="0 0 24 24" aria-label="OpenCode Go" role="img"><path fill="currentColor" fillRule="evenodd" d="M3 3h18v18H3V3zm4 4v10h10V7H7zm6 2h2v6h-2V9z" /></svg> : <span>{account.provider}</span>}
       <div><h2>{account.name}</h2><p>{account.groups.plan.data?.name ?? 'Plan unknown'}</p></div>
       {stale && <svg width="16" height="16" viewBox="0 0 20 20" role="img" aria-label="Stale reading"><title>Last-good values may be out of date</title><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>}
     </header>
@@ -80,8 +80,11 @@ function App() {
     <header className="page-heading"><div><h1>Tally</h1><p>{latest ? `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p></div><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Scheduling…' : 'Refresh'}</button></header>
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
     {data?.status.inventory.error && <p className="notice" role="alert">{data.status.inventory.error.message}</p>}
-    <div className="accounts">{data?.accounts.map(account => <GoCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div>
-    {data?.accounts.length === 0 && <p>No Go Accounts available. Add an OpenCode Go Account in OpenCode, or check the database path in Tally settings on your Mac.</p>}
+    {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
+      <h2>{pinned ? 'Pinned' : 'Other accounts'}</h2>
+      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div>
+    </section>)}
+    {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}
   </main>
 }

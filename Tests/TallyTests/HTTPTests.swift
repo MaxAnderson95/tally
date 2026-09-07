@@ -20,7 +20,15 @@ private struct AuthorityResponder: HTTPResponder {
 }
 
 @Test func routesEnforcePolicyAndReadCachedState() async throws {
-    let owner = TallyOwner(clock: { Date() }, inventory: { [] }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
+    let owner = TallyOwner(clock: { Date() }, inventory: {
+        InventoryRead(databaseIdentity: "test-db", credentials: providerOrder.map {
+            StoredCredential(storedID: $0, name: $0, key: "private-\($0)", provider: $0)
+        })
+    }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
+    try await owner.refresh(accountIDs: [])
+    let initial = await owner.snapshot()
+    let pins = [initial.accounts[3].id, initial.accounts[0].id]
+    try await owner.setPins(pins)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -34,6 +42,13 @@ private struct AuthorityResponder: HTTPResponder {
             try await client.execute(uri: path, method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
                 #expect(response.status == .ok)
             }
+        }
+        try await client.execute(uri: "/api/v1/accounts", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+            let data = Data(response.body.readableBytesView)
+            let decoded = try Wire.decoder().decode(AccountsResponse.self, from: data)
+            #expect(decoded.accounts.filter(\.pinned).map(\.id) == pins)
+            #expect(decoded.accounts.map(\.provider) == ["xai", "anthropic", "openai", "opencode-go"])
+            #expect(!String(decoding: data, as: UTF8.self).contains("private-"))
         }
         for path in ["/api", "/api/nope", "/api/v1/nope", "/assets/missing.js", "/missing"] {
             try await client.execute(uri: path, method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
@@ -65,7 +80,7 @@ private struct AuthorityResponder: HTTPResponder {
 }
 
 @Test func listenerCollisionAndFreshLifetime() async throws {
-    let owner = TallyOwner(clock: { Date() }, inventory: { [] }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    let owner = TallyOwner(clock: { Date() }, inventory: { InventoryRead(databaseIdentity: "test-db", credentials: []) }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }

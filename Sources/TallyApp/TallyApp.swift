@@ -11,6 +11,7 @@ final class Runtime: ObservableObject {
     @Published var databasePath: String
     @Published var port: String
     @Published var webOrigin: String
+    @Published var settingsError: String?
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -37,6 +38,7 @@ final class Runtime: ObservableObject {
         displayTask = Task {
             while !Task.isCancelled {
                 snapshot = await owner.snapshot()
+                if let error = await owner.settingsError() { settingsError = error.message }
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
@@ -76,8 +78,26 @@ final class Runtime: ObservableObject {
         UserDefaults.standard.set(databasePath, forKey: "databasePath")
         UserDefaults.standard.set(number, forKey: "port")
         UserDefaults.standard.set(webOrigin, forKey: "webOrigin")
+        do { try await owner.setDatabasePath(databasePath); settingsError = nil }
+        catch let fault as Fault { settingsError = fault.message }
+        catch { settingsError = "Cannot read the selected database." }
+        snapshot = await owner.snapshot()
         let previous = serverTask; previous?.cancel(); await previous?.value
         startServer()
+    }
+
+    func pin(_ account: Account, move: Int? = nil) async {
+        var ids = (snapshot?.accounts ?? []).filter(\.pinned).map(\.id)
+        if let move, let index = ids.firstIndex(of: account.id) {
+            let destination = index + move
+            guard ids.indices.contains(destination) else { return }
+            ids.swapAt(index, destination)
+        } else if account.pinned { ids.removeAll { $0 == account.id } }
+        else { ids.append(account.id) }
+        do { try await owner.setPins(ids); settingsError = nil }
+        catch let fault as Fault { settingsError = fault.message }
+        catch { settingsError = "Cannot save pins." }
+        snapshot = await owner.snapshot()
     }
 
     func stop() async {
@@ -108,9 +128,9 @@ struct Dashboard: View {
                 }
                 if let error = runtime.refreshError { Text(error).font(.caption) }
                 if runtime.snapshot?.accounts.isEmpty != false {
-                    Text("No Go Accounts available. Add an OpenCode Go Account in OpenCode, or check the database path in Settings.")
+                    Text("No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Settings.")
                 }
-                ForEach(runtime.snapshot?.accounts ?? []) { account in GoCard(account: account) }
+                ForEach(runtime.snapshot?.accounts ?? []) { account in AccountCard(account: account) }
                 Divider()
                 HStack {
                     Button("Settings") { settings.toggle() }
@@ -119,7 +139,19 @@ struct Dashboard: View {
                 }
                 if settings {
                     TextField("OpenCode database path", text: $runtime.databasePath)
-                    Text("Database path changes apply after restarting Tally.").font(.caption)
+                    Text("Manage Account names and authentication in OpenCode.").font(.caption)
+                    if let error = runtime.settingsError { Text(error).font(.caption) }
+                    ForEach(runtime.snapshot?.accounts ?? []) { account in
+                        HStack {
+                            Button(account.pinned ? "Unpin" : "Pin") { Task { await runtime.pin(account) } }
+                            Text(account.name)
+                            Spacer()
+                            if account.pinned {
+                                Button("↑") { Task { await runtime.pin(account, move: -1) } }.accessibilityLabel("Move \(account.name) earlier")
+                                Button("↓") { Task { await runtime.pin(account, move: 1) } }.accessibilityLabel("Move \(account.name) later")
+                            }
+                        }
+                    }
                     TextField("Loopback port", text: $runtime.port)
                     TextField("Allowed HTTPS web origin (optional)", text: $runtime.webOrigin)
                     Button("Save settings and restart listener") { Task { await runtime.saveSettings() } }
@@ -129,12 +161,14 @@ struct Dashboard: View {
     }
 }
 
-struct GoCard: View {
+struct AccountCard: View {
     let account: Account
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                GoLogo().fill(style: FillStyle(eoFill: true)).frame(width: 22, height: 22).accessibilityLabel("OpenCode Go")
+                if account.provider == "opencode-go" {
+                    GoLogo().fill(style: FillStyle(eoFill: true)).frame(width: 22, height: 22).accessibilityLabel("OpenCode Go")
+                } else { Text(account.provider).font(.caption) }
                 VStack(alignment: .leading) {
                     Text(account.name).font(.headline)
                     Text(account.groups.plan.data?.name ?? "Plan unknown").font(.caption).foregroundStyle(.secondary)

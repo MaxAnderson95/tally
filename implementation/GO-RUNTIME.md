@@ -6,7 +6,7 @@
 
 `Models.swift` defines the v1 DTO subset needed for Go. Its `Null` property wrapper encodes required unavailable fields as JSON null. Go's unused data groups use `AbsentData`, always null, until later provider layers supply concrete DTOs. `web/src/api.ts` holds the matching handwritten TypeScript shapes. Clients format percentages and countdowns; the owner derives remaining percentages, staleness, pin lines, and pacing.
 
-This slice intentionally has process-local opaque identity and reading storage. Ticket #15 must replace that with namespace-aware durable inventory continuity before promising stable IDs across restart. Later scheduling work adds backoff, Retry-After, rejected-credential blocking, and persistent cooldowns. Pin settings/palette sequencing, login startup, complete native/web presentation, and release distribution remain their own tickets. The installed slice has no helper or redemption implementation.
+`AccountIdentity.swift` stores namespace-aware identity, preferences, provider-local palette sequencing, and last-good readings. See [Account identity](ACCOUNT-IDENTITY.md) for continuity evidence and storage behavior. Later scheduling work adds backoff, Retry-After, rejected-credential blocking, and persistent cooldowns. Login startup, complete native/web presentation, and release distribution remain their own tickets. The installed slice has no helper or redemption implementation.
 
 ## Verified upstream revisions
 
