@@ -51,6 +51,14 @@ export type Status = {
 export type AccountsResponse = { status: Status; accounts: Account[] }
 export type Schedule = { state: 'started' | 'joined' | 'deferred' | 'blocked'; nextAttemptAt: string | null; reason: Fault | null }
 export type RefreshResponse = { accounts: { accountId: string; schedule: Schedule }[]; activity: Schedule }
+export type Redemption = {
+  operationId: string; accountId: string; accountName: string
+  requestedCreditId: string | null; selectedCreditId: string | null
+  createdAt: string; updatedAt: string
+  state: 'pending' | 'confirmed' | 'nothing_to_reset' | 'no_credit' | 'failed' | 'unknown'
+  providerResult: { code: string; windowsReset: number | null } | null
+  error: Fault | null; acknowledgementRequired: boolean; acknowledgedAt: string | null; resultUrl: string
+}
 
 export function scheduleLabel(schedule: Schedule): string {
   const label = { started: 'Refresh requested', joined: 'Joined existing refresh', deferred: 'Deferred', blocked: 'Blocked' }[schedule.state]

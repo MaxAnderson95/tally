@@ -5,7 +5,7 @@
 
 A personal macOS AI subscription usage tracker for the menu bar, mobile web, and REST API. Tally discovers stored Anthropic, OpenAI, OpenCode Go, and xAI/Grok subscription Accounts and collects OpenCode Go quotas.
 
-The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Recorded activity has reviewed API-equivalent estimates; redemption remains a later implementation layer.
+The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Recorded activity has reviewed API-equivalent estimates. The shared owner and REST support durable reset commands; native/web confirmation controls and the companion follow separately.
 
 An OpenCode companion plugin is planned for model-facing usage queries and reset redemption. Its tool description will encourage periodic usage checks.
 
@@ -26,7 +26,11 @@ The web app and `/api/v1/status`, `/api/v1/accounts`, `/api/v1/accounts/{id}`, a
 
 http://127.0.0.1:7483
 
-Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests activity only. Every valid explicit refresh schedules activity independently of provider cooldowns. The unused Go groups have successful null observations after collection; command recovery storage is explicitly unavailable. Redemption routes do not exist.
+Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests activity only. Every valid explicit refresh schedules activity independently of provider cooldowns. The unused Go groups have successful null observations after collection.
+
+`POST /api/v1/accounts/{accountId}/redemptions` accepts `{"operationId":"client-UUID","creditId":"optional-explicit-credit-ID"}`. Omit `creditId` for expiry-ordered selection from a fresh preflight. Submission returns 202 while pending or 200 for a retained outcome, with `Location` equal to `resultUrl`. Retry submission with the same UUID and original request, or read `GET /api/v1/redemptions/{operationId}`. A consume can spend one real credit and requires an explicit user request targeting that Account. Tally never automatically retries the provider mutation.
+
+Unknown outcomes block the Account and proven same or uncertain upstream targets across database namespaces. Explicit `POST /api/v1/redemptions/{operationId}/acknowledge` with `{}` releases the block only after durable acknowledgement, keeps the outcome unknown, and sends nothing to OpenAI. Command records live in `~/Library/Application Support/Tally/redemptions.sqlite`, independently of inventory and reading caches, without automatic pruning. Removing an Account or switching the OpenCode database retains its operations. Storage failure declines new consumes; an interrupted possible send recovers as unknown. Quit waits at most 15 seconds for redemption work. See [durable redemption verification](docs/verification/durable-redemptions.md).
 
 `GET /api/v1/activity?range=today|yesterday|last30days` returns cached retained OpenCode activity; omitted range defaults to Today. Native and web have the same ranges, five recorded token components, recorded cost, provider/model breakdowns, and exactly 30 calendar trend buckets. Activity scans run independently every two minutes, on launch/wake, and on valid explicit refresh. History belongs to recorded providers in the selected local database, never current Accounts. Zen is excluded. Failed scans preserve stale last-good views in their original timezone; successful scans replace totals, including source deletions. See [recorded activity verification](docs/verification/recorded-activity.md).
 

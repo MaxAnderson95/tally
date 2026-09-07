@@ -22,6 +22,10 @@ public actor TallyOwner {
     private var activityTask: Task<Void, Never>?
     private var nextInventoryAt: Date?
     private var stopping = false
+    private var redemptions: RedemptionJournal
+    private let resetProvider: OpenAIRedemption
+    private var redemptionTasks: [String: Task<Void, Never>] = [:]
+    private let quitWait: Duration
 
     public init(databasePath: String, appBuild: String, storageURL: URL? = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Tally/accounts.json")) {
         let source = OpenCodeInventory(path: databasePath)
@@ -32,6 +36,9 @@ public actor TallyOwner {
         let anthropic = AnthropicUsage()
         let openai = OpenAIUsage()
         let grok = GrokUsage()
+        redemptions = RedemptionJournal(storage: storageURL.map { .disk($0.deletingLastPathComponent().appendingPathComponent("redemptions.sqlite")) } ?? .unavailable, now: Date())
+        resetProvider = OpenAIRedemption()
+        quitWait = .seconds(15)
         collections = { credential in
             switch credential.provider {
             case "opencode-go": [.go { try await usage.collect(key: credential.key) }]
@@ -49,6 +56,9 @@ public actor TallyOwner {
 
     init(appBuild: String = "test", clock: @escaping @Sendable () -> Date,
          storageURL: URL? = nil,
+         redemptionStorage: RedemptionStorage = .unavailable,
+         resetProvider: OpenAIRedemption = OpenAIRedemption(transport: { _ in throw Fault("unexpected", "No test reset transport configured.") }),
+         quitWait: Duration = .seconds(15),
          inventory: @escaping @Sendable () throws -> InventoryRead,
          collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
          timezone: @escaping @Sendable () -> TimeZone = { TimeZone.current },
@@ -61,6 +71,9 @@ public actor TallyOwner {
         self.scanActivity = scanActivity
         self.timezone = timezone
         store = AccountIdentityStore(url: storageURL)
+        redemptions = RedemptionJournal(storage: redemptionStorage, now: clock())
+        self.resetProvider = resetProvider
+        self.quitWait = quitWait
     }
 
     public func snapshot() -> AccountsResponse {
@@ -68,6 +81,10 @@ public actor TallyOwner {
         var inventory = inventory; inventory.age(at: now)
         let display = accounts.map { original in
             var account = original
+            if let block = redemptions.block(accountID: account.id, target: credentials[account.id]?.evidence) {
+                account.command = CommandSummary(blockingOperationId: block.result.operationId, state: block.result.state.rawValue,
+                                                 acknowledgementRequired: block.result.acknowledgementRequired)
+            } else { account.command = CommandSummary() }
             account.groups.plan.age(at: now); account.groups.quotas.age(at: now)
             account.groups.extraUsage.age(at: now); account.groups.balances.age(at: now)
             account.groups.resetSummary.age(at: now); account.groups.resetDetails.age(at: now)
@@ -82,7 +99,8 @@ public actor TallyOwner {
             return account
         }
         return AccountsResponse(status: Status(appBuild: appBuild, serverTime: now, timezone: TimeZone.current.identifier,
-                                               owner: stopping ? "shutting_down" : "ready", inventory: inventory), accounts: display.sorted(by: accountOrder))
+                                               owner: stopping ? "shutting_down" : "ready", inventory: inventory,
+                                               recoveryStorage: RecoveryStorage(available: redemptions.error == nil, error: redemptions.error)), accounts: display.sorted(by: accountOrder))
     }
 
     public func account(id: String) throws -> AccountResponse {
@@ -236,6 +254,7 @@ public actor TallyOwner {
     /// The app calls this while awake; the owner decides which work is due.
     public func tick() {
         guard !stopping else { return }
+        redemptions.retryResults()
         if nextInventoryAt.map({ $0 <= clock() }) ?? true {
             _ = try? refresh(accountIDs: nil, automatic: true)
         } else {
@@ -337,6 +356,7 @@ public actor TallyOwner {
         }
         let schedules = jobs.map { job -> Schedule in
             let key = JobKey(account: id, job: job.id)
+            if job.id == "reset-credits", redemptionTasks.keys.contains(where: { redemptions.records[$0]?.result.accountId == id }) { return Schedule(state: "joined") }
             if tasks[key] != nil { return Schedule(state: "joined") }
             var policy = attempts[id]?[job.id] ?? AttemptPolicy()
             if let decision = policy.decision(at: now, automatic: automatic) { return decision }
@@ -438,6 +458,191 @@ public actor TallyOwner {
         stopping = true
         for task in tasks.values { task.cancel() }
         activityTask?.cancel()
-        await waitForCollection()
+        let deadline = ContinuousClock.now.advanced(by: quitWait)
+        while !redemptionTasks.isEmpty && ContinuousClock.now < deadline {
+            do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(10))), clock: .continuous) }
+            catch { break }
+        }
+        for task in redemptionTasks.values { task.cancel() }
+        // Durable pending/marker records already encode the recovery decision. Do not extend
+        // the Quit deadline waiting for cancellation, another disk write, or collection.
+        redemptions.interruptPending(at: clock())
+        redemptionTasks = [:]
+    }
+
+    public func submitRedemption(accountID: String, operationID: String, creditID: String? = nil) throws -> Redemption {
+        let id = try operationUUID(operationID)
+        guard creditID.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true else {
+            throw Fault("invalid_request", "creditId must be a nonempty credit ID.")
+        }
+        if let existing = redemptions.records[id] {
+            guard existing.result.accountId == accountID, existing.result.requestedCreditId == creditID else {
+                throw Fault("operation_conflict", "This UUID already identifies a different original request.")
+            }
+            return existing.result
+        }
+        guard !stopping else { throw Fault("shutting_down", "Tally is shutting down.") }
+        guard let account = accounts.first(where: { $0.id == accountID }) else { throw Fault("account_not_found", "Account not found.") }
+        guard account.provider == "openai" else { throw Fault("invalid_request", "Banked resets require an OpenAI Account.") }
+        guard let target = credentials[accountID]?.evidence, let namespace = databaseIdentity else {
+            throw Fault("inventory_unavailable", "Current Account identity is unavailable.")
+        }
+        if let blocked = redemptions.block(accountID: accountID, target: target) {
+            var fault = Fault("account_blocked", "A pending or unacknowledged operation blocks this Account or its uncertain upstream identity.")
+            fault.blockingOperationId = blocked.result.operationId
+            throw fault
+        }
+        let now = clock()
+        let result = Redemption(operationId: id, accountId: accountID, accountName: account.name, requestedCreditId: creditID,
+                                createdAt: now, updatedAt: now, resultUrl: "/api/v1/redemptions/\(id)")
+        let record = RedemptionRecord(result: result, namespace: namespace, target: target)
+        do { try redemptions.save(record) }
+        catch { redemptions.retainUncommitted(record, at: now); throw recoveryFault() }
+        // Unstructured owner work survives the submitting browser's task cancellation.
+        redemptionTasks[id] = Task { await performRedemption(id) }
+        return result
+    }
+
+    public func redemption(operationID: String) throws -> Redemption {
+        guard let result = redemptions.records[try operationUUID(operationID)]?.result else { throw Fault("operation_not_found", "Operation not found.") }
+        return result
+    }
+
+    public func acknowledgeRedemption(operationID: String) throws -> Redemption {
+        let id = try operationUUID(operationID)
+        guard var record = redemptions.records[id] else { throw Fault("operation_not_found", "Operation not found.") }
+        guard record.result.state == .unknown else { throw Fault("operation_conflict", "Only an unknown outcome can be acknowledged.") }
+        if record.result.acknowledgedAt != nil { return record.result }
+        guard !stopping else { throw Fault("shutting_down", "Tally is shutting down.") }
+        record.result.acknowledgedAt = clock(); record.result.updatedAt = clock()
+        record.result.acknowledgementRequired = false
+        try redemptions.save(record)
+        return record.result
+    }
+
+    private func currentRedemptionCredential(_ record: RedemptionRecord) throws -> StoredCredential {
+        inventory.lastAttemptAt = clock()
+        do {
+            if let identifySource { enterNamespace(try identifySource()) }
+            reconcile(try inventorySource())
+        } catch {
+            let fault = Fault("inventory_unavailable", "Current OpenCode inventory could not be verified.")
+            inventory.fail(fault, at: clock())
+            nextInventoryAt = clock().addingTimeInterval(120)
+            inventory.nextAttemptAt = nextInventoryAt
+            for index in accounts.indices {
+                accounts[index].groups.restoreStale()
+                for group in ReadingGroup.allCases { group.update(&accounts[index].groups, next: nil, fault: fault) }
+            }
+            persist()
+            throw fault
+        }
+        guard record.namespace == databaseIdentity, let credential = credentials[record.result.accountId],
+              record.target.relation(to: credential.evidence) == .same else {
+            throw Fault("credentials_unavailable", "The original Account target is no longer verified. No substitute Account will be used.")
+        }
+        guard credential.expiresAt.map({ $0 > clock() }) ?? true, !credential.key.isEmpty,
+              credential.workspace.map({ !$0.isEmpty }) == true,
+              !attempts[record.result.accountId, default: [:]].values.contains(where: { $0.blockedCredential == credential.fingerprint }) else {
+            throw Fault("credentials_unavailable", "Waiting for OpenCode to supply usable credentials and workspace for this Account.")
+        }
+        return credential
+    }
+
+    private func performRedemption(_ id: String) async {
+        guard var record = redemptions.records[id] else { return }
+        let accountID = record.result.accountId
+        var preflightStarted = false
+        var preflightFinished = false
+        var consumeAttempted = false
+        var credential: StoredCredential?
+        do {
+            try Task.checkCancellation()
+            let current = try currentRedemptionCredential(record)
+            credential = current
+            let key = JobKey(account: accountID, job: "reset-credits")
+            if tasks[key] != nil { throw Fault("provider_cooldown", "Credit collection is already running. This command will not queue a later spend.") }
+            var policy = attempts[accountID]?[key.job] ?? AttemptPolicy()
+            if let decision = policy.decision(at: clock(), automatic: false) {
+                var fault = Fault("provider_cooldown", "Credit preflight is deferred. This command will not queue a later spend.")
+                fault.retryAt = decision.nextAttemptAt
+                throw fault
+            }
+            policy.start(at: clock()); attempts[accountID, default: [:]][key.job] = policy
+            preflightStarted = true
+            if let index = accounts.firstIndex(where: { $0.id == accountID }) {
+                ReadingGroup.resetDetails.update(&accounts[index].groups, attempt: clock(), next: nil, refreshing: true)
+            }
+            persist()
+            let details = try await resetProvider.credits(current)
+            try Task.checkCancellation()
+            guard redemptions.records[id]?.result.state == .pending else { return }
+            // Re-read after the network suspension: removal, namespace switch, or credential rotation cannot retarget the command.
+            let verified = try currentRedemptionCredential(record)
+            guard verified.fingerprint == current.fingerprint else { throw Fault("credentials_unavailable", "Credentials changed during preflight. Request a new operation using current details.") }
+            finish(key: key, credential: current.fingerprint, namespace: record.namespace, groups: [.resetDetails], result: .success([.resetDetails(details)]))
+            preflightFinished = true
+            guard let selected = selectCredit(details, requested: record.result.requestedCreditId, at: clock()) else {
+                record.result.state = .no_credit
+                record.result.error = Fault("no_credit", "Preflight found no identifiable available credit matching the request.")
+                completeRedemption(record)
+                return
+            }
+            record.result.selectedCreditId = selected.id
+            record.result.updatedAt = clock()
+            record.maySend = true
+            try redemptions.save(record)
+            consumeAttempted = true
+            let verdict = try await resetProvider.consume(verified, credit: selected.id, operation: id)
+            try Task.checkCancellation()
+            guard redemptions.records[id]?.result.state == .pending else { return }
+            record.result.providerResult = verdict
+            switch verdict.code {
+            case "reset", "already_redeemed": record.result.state = .confirmed
+            case "nothing_to_reset": record.result.state = .nothing_to_reset
+            default: record.result.state = .no_credit
+            }
+        } catch {
+            guard redemptions.records[id]?.result.state == .pending else { return }
+            // A failed marker commit never reaches consume. If retaining that known failure
+            // also fails, the journal keeps a conservative block for the possible durable marker.
+            if consumeAttempted { record.interrupt(at: clock()) }
+            else {
+                record.result.state = .failed
+                record.result.error = error as? Fault ?? Fault("provider_unavailable", "Credit preflight did not complete. No consume was sent.")
+            }
+            if consumeAttempted, let credential, record.namespace == databaseIdentity {
+                var policy = attempts[accountID]?["reset-credits"] ?? AttemptPolicy()
+                let fault = policy.finish(at: clock(), fault: error as? Fault ?? Fault("provider_response_unknown", "The consume response was lost."), credential: credential.fingerprint)
+                attempts[accountID, default: [:]]["reset-credits"] = policy
+                record.result.error?.retryAt = fault?.retryAt
+                persist()
+            }
+            if preflightStarted && !preflightFinished, let credential {
+                finish(key: JobKey(account: accountID, job: "reset-credits"), credential: credential.fingerprint,
+                       namespace: record.namespace, groups: [.resetDetails], result: .failure(record.result.error ?? Fault("provider_unavailable", "Credit preflight failed.")))
+            }
+        }
+        completeRedemption(record)
+    }
+
+    private func completeRedemption(_ original: RedemptionRecord) {
+        var record = original
+        record.result.updatedAt = clock()
+        do { try redemptions.save(record) }
+        catch { redemptions.retainUncommitted(record, at: clock()) }
+        redemptionTasks[record.result.operationId] = nil
+        if !stopping, inventory.error == nil, record.namespace == databaseIdentity, credentials[record.result.accountId] != nil {
+            if record.maySend, let index = accounts.firstIndex(where: { $0.id == record.result.accountId }) {
+                accounts[index].groups.quotas.stale = true
+                accounts[index].groups.resetDetails.stale = true
+                accounts[index].groups.resetSummary.stale = true
+            }
+            _ = schedule(id: record.result.accountId, at: clock(), automatic: false)
+        }
+    }
+
+    func waitForRedemptions() async {
+        for task in Array(redemptionTasks.values) { await task.value }
     }
 }

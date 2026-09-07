@@ -1,0 +1,40 @@
+[
+  {
+    "operationId": "791C2156-0849-4780-B77A-9742779CD2B7",
+    "accountId": "opaque-account", "accountName": "Personal",
+    "requestedCreditId": null, "selectedCreditId": null,
+    "createdAt": "2030-09-07T00:00:00.000Z", "updatedAt": "2030-09-07T00:00:00.000Z",
+    "state": "pending", "providerResult": null, "error": null,
+    "acknowledgementRequired": false, "acknowledgedAt": null,
+    "resultUrl": "/api/v1/redemptions/791C2156-0849-4780-B77A-9742779CD2B7"
+  },
+  {
+    "operationId": "791C2156-0849-4780-B77A-9742779CD2B7",
+    "accountId": "opaque-account", "accountName": "Personal",
+    "requestedCreditId": null, "selectedCreditId": "credit-a",
+    "createdAt": "2030-09-07T00:00:00.000Z", "updatedAt": "2030-09-07T00:00:15.000Z",
+    "state": "unknown", "providerResult": null,
+    "error": { "code": "provider_response_unknown", "message": "A consume may have reached OpenAI.", "retryAt": null, "blockingOperationId": null },
+    "acknowledgementRequired": true, "acknowledgedAt": null,
+    "resultUrl": "/api/v1/redemptions/791C2156-0849-4780-B77A-9742779CD2B7"
+  },
+  {
+    "operationId": "791C2156-0849-4780-B77A-9742779CD2B7",
+    "accountId": "opaque-account", "accountName": "Personal",
+    "requestedCreditId": null, "selectedCreditId": "credit-a",
+    "createdAt": "2030-09-07T00:00:00.000Z", "updatedAt": "2030-09-07T00:01:00.000Z",
+    "state": "unknown", "providerResult": null,
+    "error": { "code": "provider_response_unknown", "message": "A consume may have reached OpenAI.", "retryAt": null, "blockingOperationId": null },
+    "acknowledgementRequired": false, "acknowledgedAt": "2030-09-07T00:01:00.000Z",
+    "resultUrl": "/api/v1/redemptions/791C2156-0849-4780-B77A-9742779CD2B7"
+  },
+  {
+    "operationId": "B2A237D4-9DD1-4D7B-A17C-C5E269593938",
+    "accountId": "opaque-account", "accountName": "Personal",
+    "requestedCreditId": "credit-b", "selectedCreditId": "credit-b",
+    "createdAt": "2030-09-07T00:02:00.000Z", "updatedAt": "2030-09-07T00:02:01.000Z",
+    "state": "confirmed", "providerResult": { "code": "already_redeemed", "windowsReset": null }, "error": null,
+    "acknowledgementRequired": false, "acknowledgedAt": null,
+    "resultUrl": "/api/v1/redemptions/B2A237D4-9DD1-4D7B-A17C-C5E269593938"
+  }
+]

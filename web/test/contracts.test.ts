@@ -2,6 +2,23 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+import type { Redemption } from '../src/api.ts'
+
+test('redemption wire states preserve original selection, uncertainty and explicit acknowledgement', () => {
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  assert.deepEqual(operations.map(operation => operation.state), ['pending', 'unknown', 'unknown', 'confirmed'])
+  assert.equal(operations[0].selectedCreditId, null)
+  assert.equal(operations[1].requestedCreditId, null)
+  assert.equal(operations[1].selectedCreditId, 'credit-a')
+  assert.equal(operations[1].acknowledgementRequired, true)
+  assert.equal(operations[1].acknowledgedAt, null)
+  assert.equal(operations[2].acknowledgementRequired, false)
+  assert.equal(operations[2].acknowledgedAt, '2030-09-07T00:01:00.000Z')
+  assert.equal(operations[2].providerResult, null)
+  assert.equal(operations[3].providerResult?.code, 'already_redeemed')
+  assert.equal(operations[3].providerResult?.windowsReset, null)
+  for (const operation of operations) assert.equal(operation.resultUrl, `/api/v1/redemptions/${operation.operationId}`)
+})
 
 test('Grok PAYG uses the exact native/REST credit amounts without dollar conversion', () => {
   const extra: ExtraUsage = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/grok-extra.json', import.meta.url), 'utf8'))

@@ -67,6 +67,38 @@ public struct TallyResponder: HTTPResponder {
             return Response(status: .ok, headers: [.contentType: type, .cacheControl: "no-store"], body: request.method == .head ? .init() : .init(byteBuffer: .init(bytes: data)))
         }
         do {
+            let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+            if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "redemptions" {
+                guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST to submit a redemption.")) }
+                let buffer = try await request.body.collect(upTo: 16_384)
+                struct Input: Decodable {
+                    var operationId: String
+                    var creditId: String?
+                    enum CodingKeys: String, CodingKey { case operationId, creditId }
+                    init(from decoder: any Decoder) throws {
+                        let fields = try decoder.container(keyedBy: CodingKeys.self)
+                        operationId = try fields.decode(String.self, forKey: .operationId)
+                        creditId = fields.contains(.creditId) ? try fields.decode(String.self, forKey: .creditId) : nil
+                    }
+                }
+                let input = try JSONDecoder().decode(Input.self, from: Data(buffer.readableBytesView))
+                let result = try await owner.submitRedemption(accountID: String(parts[4]), operationID: input.operationId, creditID: input.creditId)
+                var response = try json(result, status: result.state == .pending ? .accepted : .ok)
+                response.headers[.location] = result.resultUrl
+                return response
+            }
+            if (parts.count == 5 || (parts.count == 6 && parts[5] == "acknowledge")), parts[1] == "api", parts[2] == "v1", parts[3] == "redemptions", !parts[4].isEmpty {
+                if parts.count == 5 {
+                    guard request.method == .get else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use GET to read a redemption.")) }
+                    return try json(await owner.redemption(operationID: String(parts[4])))
+                }
+                guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST to acknowledge uncertainty.")) }
+                let buffer = try await request.body.collect(upTo: 16_384)
+                guard let object = try JSONSerialization.jsonObject(with: Data(buffer.readableBytesView)) as? [String: Any], object.isEmpty else {
+                    throw Fault("invalid_request", "Acknowledgement requires an empty JSON object.")
+                }
+                return try json(await owner.acknowledgeRedemption(operationID: String(parts[4])))
+            }
             if path == "/api/v1/refresh" {
                 guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST for refresh.")) }
                 let buffer = try await request.body.collect(upTo: 16_384)
@@ -100,7 +132,14 @@ public struct TallyResponder: HTTPResponder {
             }
             return try json(await owner.account(id: String(path.dropFirst(detailPrefix.count))))
         } catch let fault as Fault {
-            return failure(fault.code == "account_not_found" ? .notFound : .serviceUnavailable, fault)
+            let status: HTTPResponse.Status
+            switch fault.code {
+            case "invalid_request": status = .badRequest
+            case "account_not_found", "operation_not_found": status = .notFound
+            case "operation_conflict", "account_blocked": status = .conflict
+            default: status = .serviceUnavailable
+            }
+            return failure(status, fault)
         } catch {
             return failure(.badRequest, Fault("invalid_request", "Request could not be processed."))
         }

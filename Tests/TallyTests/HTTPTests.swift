@@ -177,3 +177,80 @@ private struct AuthorityResponder: HTTPResponder {
     }
     await owner.shutdown()
 }
+
+@Test func redemptionRoutesExposeDurableStatusLocationAndStructuredErrors() async throws {
+    let scenario = ResetScenario()
+    let gate = ResetGate()
+    let owner = scenario.owner(transport: { request in
+        let response = try scenario.transport(request)
+        if request.httpMethod == "POST" { await gate.wait(); throw URLError(.networkConnectionLost) }
+        return response
+    })
+    let account = try await resetAccount(owner)
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("Tally".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    let id = UUID().uuidString
+    let submit = "/api/v1/accounts/\(account)/redemptions"
+    let resultURL = "/api/v1/redemptions/\(id)"
+    let body = "{\"operationId\":\"\(id)\"}"
+    let headers: HTTPFields = [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]
+    try await app.test(.router) { client in
+        for invalid in ["{}", "[]", "null", "{\"operationId\":null}", "{\"operationId\":\"bad\"}", "{\"operationId\":\"\(id)\",\"creditId\":null}", "{\"operationId\":\"\(id)\",\"creditId\":\"\"}"] {
+            try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: invalid)) { response in #expect(response.status == .badRequest) }
+        }
+        try await client.execute(uri: submit, method: .post, headers: [testAuthority: "127.0.0.1:7483"], body: .init(string: body)) { response in #expect(response.status == .unsupportedMediaType) }
+        try await client.execute(uri: submit, method: .post, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json", .origin: "https://evil.example"], body: .init(string: body)) { response in #expect(response.status == .forbidden) }
+        for _ in 0..<2 {
+            try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: body)) { response in
+                #expect(response.status == .accepted)
+                #expect(response.headers[.location] == resultURL)
+                let decoded = try Wire.decoder().decode(Redemption.self, from: Data(response.body.readableBytesView))
+                #expect(decoded.state == .pending && decoded.resultUrl == resultURL && decoded.operationId == id)
+            }
+        }
+        for conflicting in ["{\"operationId\":\"\(id)\",\"creditId\":\"credit-a\"}", "{\"operationId\":\"\(UUID().uuidString)\"}"] {
+            try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: conflicting)) { response in
+                #expect(response.status == .conflict)
+                struct Envelope: Decodable { var error: Fault }
+                let fault = try Wire.decoder().decode(Envelope.self, from: Data(response.body.readableBytesView)).error
+                #expect(["operation_conflict", "account_blocked"].contains(fault.code))
+                if fault.code == "account_blocked" { #expect(fault.blockingOperationId == id) }
+            }
+        }
+        try await client.execute(uri: resultURL + "/acknowledge", method: .post, headers: headers, body: .init(string: "{}")) { response in #expect(response.status == .conflict) }
+        for path in [submit, resultURL + "/acknowledge"] {
+            try await client.execute(uri: path, method: .get, headers: headers) { response in #expect(response.status == .methodNotAllowed) }
+        }
+        try await client.execute(uri: resultURL, method: .post, headers: headers, body: .init(string: "{}")) { response in #expect(response.status == .methodNotAllowed) }
+        try await client.execute(uri: "/api/v1/redemptions/bad", method: .get, headers: headers) { response in #expect(response.status == .badRequest) }
+        try await client.execute(uri: "/api/v1/redemptions/\(UUID().uuidString)", method: .get, headers: headers) { response in #expect(response.status == .notFound) }
+        await gate.open(); await owner.waitForRedemptions()
+        try await client.execute(uri: resultURL, method: .get, headers: headers) { response in
+            #expect(response.status == .ok)
+            let decoded = try Wire.decoder().decode(Redemption.self, from: Data(response.body.readableBytesView))
+            #expect(decoded.state == .unknown && decoded.acknowledgementRequired)
+            #expect(try Wire.encoder().encode(decoded) == Wire.encoder().encode(await owner.redemption(operationID: id)))
+        }
+        try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: body)) { response in
+            #expect(response.status == .ok && response.headers[.location] == resultURL)
+        }
+        for invalid in ["[]", "null", "{\"acknowledge\":true}"] {
+            try await client.execute(uri: resultURL + "/acknowledge", method: .post, headers: headers, body: .init(string: invalid)) { response in #expect(response.status == .badRequest) }
+        }
+        for _ in 0..<2 {
+            try await client.execute(uri: resultURL + "/acknowledge", method: .post, headers: headers, body: .init(string: "{}")) { response in
+                #expect(response.status == .ok)
+                let decoded = try Wire.decoder().decode(Redemption.self, from: Data(response.body.readableBytesView))
+                #expect(decoded.state == .unknown && !decoded.acknowledgementRequired && decoded.acknowledgedAt != nil)
+            }
+        }
+        scenario.fail(on: [5])
+        try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: "{\"operationId\":\"\(UUID().uuidString)\"}")) { response in #expect(response.status == .serviceUnavailable) }
+        await owner.shutdown()
+        try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: "{\"operationId\":\"\(UUID().uuidString)\"}")) { response in #expect(response.status == .serviceUnavailable) }
+    }
+    #expect(scenario.calls().map(\.httpMethod) == ["GET", "POST"])
+}
