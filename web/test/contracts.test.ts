@@ -3,6 +3,114 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 import type { Redemption } from '../src/api.ts'
+import { creditUsable, RedemptionClient, redemptionLabel } from '../src/redemptions.ts'
+
+test('reset response loss and reload recover the same UUID with reads only', async () => {
+  const stored = new Map<string, string>()
+  const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value) }, removeItem: (key: string) => { stored.delete(key) } }
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  let operation = operations[0]
+  const calls: { url: string; method: string }[] = []
+  let offline = true
+  const transport: typeof fetch = async (input, init) => {
+    const url = String(input), method = init?.method ?? 'GET'
+    calls.push({ url, method })
+    if (method === 'POST') {
+      const body = JSON.parse(String(init?.body))
+      assert.equal(stored.get('tally.redemption.personal'), body.operationId)
+      operation = { ...operation, operationId: body.operationId, requestedCreditId: body.creditId }
+      throw new Error('Response lost after acceptance')
+    }
+    if (offline) throw new Error('Disconnected')
+    assert.ok(url.endsWith(operation.operationId))
+    return Response.json(operation)
+  }
+  const client = new RedemptionClient('personal', storage, transport)
+  await client.submit('credit-a')
+  assert.equal(client.blocked, true)
+  await client.submit('credit-b')
+  const restored = new RedemptionClient('personal', storage, transport)
+  assert.equal(restored.operationId, operation.operationId)
+  offline = false
+  await restored.recover()
+  assert.equal(restored.operation?.requestedCreditId, 'credit-a')
+  operation = { ...operation, state: 'unknown', acknowledgementRequired: true }
+  await restored.recover()
+  assert.equal(restored.blocked, true)
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1)
+  assert.equal(new RedemptionClient('other', storage, transport).blocked, false)
+})
+
+test('unknown acknowledgement failure retains the block and never consumes again', async () => {
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  let operation = operations[1]
+  const storage = { getItem: () => operation.operationId, setItem: () => {}, removeItem: () => {} }
+  let fail = true
+  const calls: string[] = []
+  const client = new RedemptionClient(operation.accountId, storage, async (url, init) => {
+    calls.push(String(url))
+    if (init?.method === 'POST') {
+      assert.ok(String(url).endsWith('/acknowledge'))
+      if (fail) return Response.json({ error: {} }, { status: 503 })
+      operation = { ...operation, acknowledgedAt: '2030-09-07T00:01:00Z', acknowledgementRequired: false }
+    }
+    return Response.json(operation)
+  })
+  await client.recover()
+  await client.acknowledge()
+  assert.equal(client.blocked, true)
+  assert.match(client.error!, /not confirmed/)
+  assert.equal(client.operationId, operation.operationId)
+  fail = false
+  await client.acknowledge()
+  assert.equal(client.blocked, false)
+  assert.equal(client.operation?.state, 'unknown')
+  assert.equal(calls.some(url => url.includes('/accounts/')), false)
+})
+
+test('reset controls decline unavailable identity storage and show confirmed stale wording', async () => {
+  let sends = 0
+  const client = new RedemptionClient('a', { getItem: () => null, setItem: () => { throw new Error('Full') }, removeItem: () => {} }, async () => { sends++; return Response.json({}) })
+  await client.submit('credit-a')
+  assert.equal(sends, 0)
+  assert.match(client.error!, /No reset was sent/)
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  assert.equal(redemptionLabel(operations[3], account), 'Reset confirmed; usage update unavailable')
+  const credit: Credit = { id: 'a', type: null, status: 'available', available: true, title: null, description: null, grantedAt: null, expiry: { kind: 'unknown', at: null } }
+  assert.equal(creditUsable(credit), true)
+  assert.equal(creditUsable({ ...credit, expiry: { kind: 'none', at: null } }), true)
+  assert.equal(creditUsable({ ...credit, expiry: { kind: 'at', at: '2000-01-01T00:00:00Z' } }), false)
+  assert.equal(creditUsable({ ...credit, available: null }), false)
+})
+
+test('an older operation read cannot overwrite durable acknowledgement', async () => {
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  const unknown = operations[1]
+  let reads = 0
+  const delayed = Promise.withResolvers<Response>()
+  const client = new RedemptionClient(unknown.accountId, { getItem: () => unknown.operationId, setItem: () => {}, removeItem: () => {} }, async (_url, init) => {
+    if (init?.method === 'POST') return Response.json({ ...unknown, acknowledgementRequired: false, acknowledgedAt: '2030-09-07T00:01:00Z' })
+    return ++reads === 1 ? Response.json(unknown) : delayed.promise
+  })
+  await client.recover()
+  const reading = client.recover()
+  await client.acknowledge()
+  delayed.resolve(Response.json(unknown))
+  await reading
+  assert.equal(client.blocked, false)
+  assert.equal(client.operation?.acknowledgementRequired, false)
+})
+
+test('a server rejection names the fault without creating a permanent browser-only block', async () => {
+  const stored = new Map<string, string>()
+  const client = new RedemptionClient('a', { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value) }, removeItem: key => { stored.delete(key) } }, async () => Response.json({ error: { code: 'inventory_unavailable', message: 'Current Account identity is unavailable.', blockingOperationId: null } }, { status: 503 }))
+  await client.submit('credit-a')
+  assert.equal(client.blocked, false)
+  assert.equal(client.operationId, null)
+  assert.equal(stored.size, 0)
+  assert.equal(client.error, 'Current Account identity is unavailable.')
+})
 
 test('redemption wire states preserve original selection, uncertainty and explicit acknowledgement', () => {
   const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))

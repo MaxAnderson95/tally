@@ -1,6 +1,57 @@
 import Foundation
 import Testing
 @testable import TallyCore
+@testable import TallyApp
+
+@Test @MainActor func redemptionNativeControlsRetainOwnerIdentityAndRequireDurableAcknowledgement() async throws {
+    let scenario = ResetScenario()
+    let gate = ResetGate()
+    let owner = scenario.owner(transport: { request in
+        if request.httpMethod == "POST" { await gate.wait() }
+        return try scenario.transport(request, body: #"{"code":"unrecognized"}"#)
+    })
+    let id = try await resetAccount(owner)
+    let account = try await owner.account(id: id).account
+    let runtime = Runtime(owner: owner)
+    let credit = Credit(id: "credit-a", status: "available", available: true, expiry: Credit.Expiry(kind: "unknown"))
+    await runtime.redeem(account, credit: credit)
+    let operationID = try #require(runtime.resetOperations[id]?.operationId)
+    await runtime.redeem(account, credit: credit)
+    #expect(runtime.resetOperations[id]?.operationId == operationID)
+    await gate.open(); await owner.waitForRedemptions()
+    await runtime.readResetState()
+    #expect(runtime.resetOperations[id]?.acknowledgementRequired == true)
+    let reopened = Runtime(owner: owner)
+    await reopened.readResetState()
+    #expect(reopened.resetOperations[id]?.operationId == operationID)
+    #expect(reopened.resetOperations[id]?.displayMessage(for: account).contains("never retries") == true)
+    scenario.fail(on: [4])
+    await reopened.acknowledgeReset(account)
+    #expect(reopened.resetOperations[id]?.acknowledgementRequired == true)
+    #expect(reopened.resetErrors[id]?.contains("not confirmed") == true)
+    scenario.fail(on: [])
+    await reopened.acknowledgeReset(account)
+    #expect(reopened.resetOperations[id]?.state == .unknown)
+    #expect(reopened.resetOperations[id]?.acknowledgementRequired == false)
+    #expect(scenario.calls().filter { $0.httpMethod == "POST" }.count == 1)
+    await owner.shutdown()
+}
+
+@Test func redemptionPresentationKeepsExpiryAndConfirmedCollectionFailureDistinct() throws {
+    var account = try Wire.decoder().decode(AccountsResponse.self, from: fixture("accounts")).accounts[0]
+    let operation = try Wire.decoder().decode([Redemption].self, from: fixture("redemptions"))[3]
+    #expect(operation.displayMessage(for: account) == "Reset confirmed; usage update unavailable")
+    account.groups.quotas.stale = false; account.groups.quotas.error = nil
+    #expect(operation.displayMessage(for: account) == "Credit already redeemed; no additional reset claimed.")
+    var credit = Credit(id: "a", status: "available", available: true, expiry: Credit.Expiry(kind: "unknown"))
+    #expect(credit.isUsable)
+    credit.expiry = Credit.Expiry(kind: "none")
+    #expect(credit.isUsable)
+    credit.expiry = Credit.Expiry(kind: "at", at: Date(timeIntervalSince1970: 0))
+    #expect(!credit.isUsable)
+    credit.available = nil
+    #expect(!credit.isUsable)
+}
 
 actor ResetGate {
     private var continuations: [CheckedContinuation<Void, Never>] = []

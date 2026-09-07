@@ -14,7 +14,7 @@ func fixture(_ name: String) throws -> Data {
     // Opt-in image evidence uses the real native views without starting the runtime or collection.
     guard let output = ProcessInfo.processInfo.environment["TALLY_PRESENTATION_OUTPUT"] else { return }
     _ = NSApplication.shared
-    let runtime = Runtime()
+    let runtime = Runtime(owner: ResetScenario().owner())
     var snapshot = try Wire.decoder().decode(AccountsResponse.self, from: fixture("accounts"))
     let base = snapshot.accounts[0]
     let now = Date()
@@ -69,10 +69,20 @@ func fixture(_ name: String) throws -> Data {
         try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
         try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 640, name: "native-activity-\(suffix)", dark: dark)
         for account in snapshot.accounts.prefix(4) {
-            try capture(AccountCard(account: account), width: 336, height: 460, name: "native-\(account.provider)-\(suffix)", dark: dark)
+            try capture(AccountCard(account: account, runtime: runtime), width: 336, height: 460, name: "native-\(account.provider)-\(suffix)", dark: dark)
         }
         try capture(HStack(spacing: 14) { Spacer(); MenuPins(runtime: runtime); Text("Mon Sep 7 16:00").font(.system(size: 12)) }.padding(.horizontal, 12), width: 1440, height: 24, name: "native-14-pins-\(suffix)", dark: dark)
         try capture(AccountDetails(account: snapshot.accounts[0]).padding(12), width: 336, height: 1800, name: "native-details-\(suffix)", dark: dark)
+        let resetAccount = snapshot.accounts[1]
+        let credit = try #require(resetAccount.groups.resetDetails.data?.credits.first)
+        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true, confirming: credit.id).padding(12), width: 360, height: 1400, name: "native-reset-confirm-\(suffix)", dark: dark)
+        var operation = try Wire.decoder().decode([Redemption].self, from: fixture("redemptions"))[1]
+        operation.accountId = resetAccount.id; operation.accountName = resetAccount.name
+        runtime.resetOperations[resetAccount.id] = operation
+        var unavailable = resetAccount
+        unavailable.groups.resetDetails.data = nil; unavailable.groups.resetSummary.data = nil
+        try capture(AccountCard(account: unavailable, runtime: runtime, resetExplanation: true).padding(12), width: 360, height: 650, name: "native-reset-unknown-\(suffix)", dark: dark)
+        runtime.resetOperations = [:]
     }
     for index in snapshot.accounts.indices { snapshot.accounts[index].pinned = false; snapshot.accounts[index].pinOrder = nil }
     runtime.snapshot = snapshot

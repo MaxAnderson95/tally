@@ -4,6 +4,7 @@ import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, group
 import './style.css'
 import { ProviderLogo, providerName, providers } from './ProviderLogo'
 import { RecordedActivity } from './RecordedActivity'
+import { useResetControls } from './ResetControls'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
@@ -11,6 +12,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
   const extra = account.groups.extraUsage
   const extraLabel = account.provider === 'xai' ? 'PAYG' : 'Extra usage'
   const [details, setDetails] = useState(false)
+  const resets = useResetControls(account)
   const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   const observed = (date: string | null) => date ? `${exact(date)} (${Math.max(0, Math.floor((Date.now() - Date.parse(date)) / 60_000))}m ago)` : 'Never'
@@ -19,9 +21,10 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       <ProviderLogo provider={account.provider} color={account.identityColorIndex} />
       <div><h2>{account.name}</h2><p>{account.groups.plan.data?.name ?? 'Plan unknown'}</p></div>
       {stale && <svg width="16" height="16" viewBox="0 0 20 20" role="img" aria-label="Stale reading"><title>Last-good values may be out of date</title><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>}
-      {account.command.state && <button className="details-toggle" onClick={() => setDetails(true)} aria-label="Show reset operation warning"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg></button>}
+      {resets.warning}
       <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}>{details ? '⌃' : '⌄'}</button>
     </header>
+    {resets.result}
     {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
     {windows.map((window, index) => <section className="quota" key={window.id}>
       <div className={index === 0 && window.durationSeconds !== null ? 'hero' : 'window-heading'}>
@@ -45,7 +48,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
         <div className="window-heading"><span>Purchased credits</span><strong>{account.groups.balances.data?.items.map(balanceLabel).join(', ') ?? 'Unavailable'}</strong></div>
         {(disconnected || groupIsStale(account.groups.balances)) && <p className="timing">Purchased credits stale</p>}
       </section>
-      <details className="reset-credits"><summary>{resetCountLabel(account.groups.resetSummary.data)}{(disconnected || groupIsStale(account.groups.resetSummary)) && ' (stale)'}</summary>
+      <details className="reset-credits" onPointerEnter={event => { if (event.pointerType === 'mouse') event.currentTarget.open = true }}><summary>{resetCountLabel(account.groups.resetSummary.data)}{(disconnected || groupIsStale(account.groups.resetSummary)) && ' (stale)'}</summary>
         <p>Reset credits for {account.name}</p>
         <p>Redeeming consumes one credit; the provider decides which windows reset.</p>
         <dl>
@@ -73,11 +76,12 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
             <dt>Granted</dt><dd>{exact(credit.grantedAt)}</dd><dt>Expiry</dt><dd>{creditExpiryLabel(credit, timezone)}</dd>
             {credit.description && <><dt>Description</dt><dd>{credit.description}</dd></>}
           </dl>
+          {resets.action(credit)}
         </section>)}
       </details>
     </>}
     {details && <section className="details" aria-label={`Details for ${account.name}`}><dl>
-      {account.command.state && <><dt>Reset operation</dt><dd>{account.command.state === 'unknown' ? 'Outcome unknown; acknowledgement required in Tally reset controls.' : 'Redeeming…'} {account.command.blockingOperationId}</dd></>}
+      {account.command.state && <><dt>Reset operation</dt><dd>{account.command.state === 'unknown' ? 'Outcome unknown; open the card-header warning to acknowledge.' : 'Redeeming…'} {account.command.blockingOperationId}</dd></>}
       <dt>Mac timezone</dt><dd>{timezone}</dd>
       {(['plan', 'quotas', 'extraUsage', 'balances', 'resetSummary', 'resetDetails'] as const).map(key => {
         const group = account.groups[key]
@@ -132,7 +136,8 @@ function App() {
     const interval = setInterval(() => { setNow(Date.now()); void poll() }, 15_000)
     const visible = () => { if (!document.hidden) { setNow(Date.now()); void poll() } }
     document.addEventListener('visibilitychange', visible)
-    return () => { stopped = true; controller.abort(); clearInterval(interval); document.removeEventListener('visibilitychange', visible) }
+    window.addEventListener('tally:operation', visible)
+    return () => { stopped = true; controller.abort(); clearInterval(interval); document.removeEventListener('visibilitychange', visible); window.removeEventListener('tally:operation', visible) }
   }, [])
   async function refresh() {
     setRefreshing(true)

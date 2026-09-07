@@ -3,7 +3,14 @@ import TallyCore
 
 struct OpenAICreditDetails: View {
     let account: Account
-    @State private var expanded = false
+    @ObservedObject var runtime: Runtime
+    @State var expanded = false
+    @State var confirming: String?
+    @State private var chosen: String?
+    private var blocked: Bool {
+        runtime.resetBusy.contains(account.id) || account.command.blockingOperationId != nil ||
+        runtime.resetOperations[account.id].map { $0.state == .pending || $0.acknowledgementRequired } == true
+    }
     var body: some View {
         let groups = account.groups
         VStack(alignment: .leading, spacing: 8) {
@@ -22,6 +29,8 @@ struct OpenAICreditDetails: View {
                     .font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
                     .overlay(Capsule().stroke(.secondary.opacity(0.2)))
             }.buttonStyle(.plain)
+                .onHover { hovering in if hovering { expanded = true } }
+                .accessibilityLabel("Reset credit details for \(account.name)")
             if expanded {
                 Text("Reset credits for \(account.name)").font(.headline)
                 Text("Redeeming consumes one credit; the provider decides which windows reset.")
@@ -39,7 +48,23 @@ struct OpenAICreditDetails: View {
                                           ("Status", credit.status ?? "Unknown"), ("Available", credit.available.map { $0 ? "Yes" : "No" } ?? "Unknown"),
                                           ("Granted", credit.grantedAt?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable"),
                                           ("Expiry", credit.expiry.kind == "none" ? "Does not expire" : credit.expiry.at?.formatted(date: .abbreviated, time: .standard) ?? "Expiry unknown"),
-                                          ("Description", credit.description ?? "Unavailable")])
+                                           ("Description", credit.description ?? "Unavailable")])
+                        let operation = runtime.resetOperations[account.id]
+                        Button(blocked && (operation == nil ? chosen : operation?.selectedCreditId ?? operation?.requestedCreditId) == credit.id && operation?.acknowledgementRequired != true ? "Redeeming…" : "Use") { confirming = credit.id }
+                            .disabled(blocked || !credit.isUsable)
+                        if confirming == credit.id && !blocked {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Use this credit on \(account.name)? This consumes one credit and cannot be undone.")
+                                HStack {
+                                    Spacer()
+                                    Button("Cancel") { confirming = nil }
+                                    Button("Use credit") {
+                                        confirming = nil; chosen = credit.id
+                                        Task { await runtime.redeem(account, credit: credit) }
+                                    }.disabled(!credit.isUsable)
+                                }
+                            }.padding(10).overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary))
+                        }
                     }
                 } else { Text("Credit list unavailable") }
             }

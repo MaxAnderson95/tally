@@ -17,19 +17,22 @@ final class Runtime: ObservableObject {
     @Published var webOrigin: String
     @Published var settingsError: String?
     @Published var storageError: String?
+    @Published var resetOperations: [String: Redemption] = [:]
+    @Published var resetErrors: [String: String] = [:]
+    @Published var resetBusy: Set<String> = []
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var displayTask: Task<Void, Never>?
     private var wakeObserver: NSObjectProtocol?
 
-    init() {
+    init(owner: TallyOwner? = nil) {
         let settings = UserDefaults.standard
         let path = settings.string(forKey: "databasePath") ?? OpenCodeInventory.defaultPath()
         databasePath = path
         port = String(settings.object(forKey: "port") as? Int ?? 7483)
         webOrigin = settings.string(forKey: "webOrigin") ?? ""
-        owner = TallyOwner(databasePath: path, appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development")
+        self.owner = owner ?? TallyOwner(databasePath: path, appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development")
     }
 
     func start() {
@@ -43,7 +46,7 @@ final class Runtime: ObservableObject {
         }
         displayTask = Task {
             while !Task.isCancelled {
-                snapshot = await owner.snapshot()
+                await readResetState()
                 activity = await owner.activityResponse(range: activityRange)
                 storageError = await owner.settingsError()?.message
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
@@ -58,6 +61,44 @@ final class Runtime: ObservableObject {
         do { refreshSchedule = try await owner.refresh(); refreshError = nil }
         catch let fault as Fault { refreshError = fault.message }
         catch { refreshError = "Refresh could not be scheduled." }
+        snapshot = await owner.snapshot()
+    }
+
+    func redeem(_ account: Account, credit: Credit) async {
+        guard credit.isUsable, !resetBusy.contains(account.id), account.command.blockingOperationId == nil,
+              resetOperations[account.id].map({ $0.state != .pending && !$0.acknowledgementRequired }) ?? true else { return }
+        resetBusy.insert(account.id)
+        defer { resetBusy.remove(account.id) }
+        let id = UUID().uuidString
+        do {
+            resetOperations[account.id] = try await owner.submitRedemption(accountID: account.id, operationID: id, creditID: credit.id)
+            resetErrors[account.id] = nil
+        } catch let fault as Fault {
+            resetErrors[account.id] = fault.message
+            if let existing = try? await owner.redemption(operationID: fault.blockingOperationId ?? id) { resetOperations[account.id] = existing }
+        } catch { resetErrors[account.id] = "Reset could not be submitted." }
+        snapshot = await owner.snapshot()
+    }
+
+    func readResetState() async {
+        snapshot = await owner.snapshot()
+        for account in snapshot?.accounts ?? [] {
+            guard !resetBusy.contains(account.id), let id = account.command.blockingOperationId ?? resetOperations[account.id]?.operationId else { continue }
+            do {
+                let operation = try await owner.redemption(operationID: id)
+                if !resetBusy.contains(account.id) { resetOperations[account.id] = operation }
+            } catch { resetErrors[account.id] = "Operation update unavailable. No reset will be resent." }
+        }
+    }
+
+    func acknowledgeReset(_ account: Account) async {
+        guard !resetBusy.contains(account.id), let operation = resetOperations[account.id], operation.acknowledgementRequired else { return }
+        resetBusy.insert(account.id)
+        defer { resetBusy.remove(account.id) }
+        do {
+            resetOperations[account.id] = try await owner.acknowledgeRedemption(operationID: operation.operationId)
+            resetErrors[account.id] = nil
+        } catch { resetErrors[account.id] = "Acknowledgement not confirmed. The warning and existing request are retained." }
         snapshot = await owner.snapshot()
     }
 
@@ -146,7 +187,7 @@ struct Dashboard: View {
                 let accounts = runtime.snapshot?.accounts ?? []
                 if accounts.contains(where: \.pinned) {
                     Text("Pinned").font(.caption).foregroundStyle(.secondary)
-                    ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account) }
+                    ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account, runtime: runtime) }
                 }
                 if accounts.contains(where: { !$0.pinned }) {
                     Text("Other accounts").font(.caption).foregroundStyle(.secondary)
@@ -154,7 +195,7 @@ struct Dashboard: View {
                         let others = accounts.filter { !$0.pinned && $0.provider == provider }
                         if !others.isEmpty {
                             Text(ProviderArtwork.logos[provider]?.name ?? provider).font(.caption).foregroundStyle(.secondary)
-                            ForEach(others) { account in AccountCard(account: account) }
+                            ForEach(others) { account in AccountCard(account: account, runtime: runtime) }
                         }
                     }
                 }
@@ -192,7 +233,9 @@ struct Dashboard: View {
 
 struct AccountCard: View {
     let account: Account
+    @ObservedObject var runtime: Runtime
     @State private var details = false
+    @State var resetExplanation = false
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -206,12 +249,26 @@ struct AccountCard: View {
                 if account.groups.quotas.stale || account.groups.quotas.data?.windows.contains(where: { $0.stale }) == true {
                     Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stale reading")
                 }
-                if account.command.state != nil {
-                    Button { details = true } label: { Image(systemName: "exclamationmark.triangle") }.help("Reset operation warning")
+                if account.command.acknowledgementRequired || runtime.resetOperations[account.id]?.acknowledgementRequired == true {
+                    Button { resetExplanation.toggle() } label: { Image(systemName: "exclamationmark.triangle") }
+                        .accessibilityLabel("Unknown reset outcome for \(account.name)")
                 }
                 Button { details.toggle() } label: { Image(systemName: details ? "chevron.up" : "chevron.down") }
                     .buttonStyle(.plain).accessibilityLabel("Details for \(account.name)")
             }
+            if let operation = runtime.resetOperations[account.id], operation.state != .pending,
+               !operation.acknowledgementRequired || resetExplanation {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(operation.displayMessage(for: account))
+                    if operation.acknowledgementRequired {
+                        Button("Acknowledge") { Task { await runtime.acknowledgeReset(account) } }
+                            .disabled(runtime.resetBusy.contains(account.id))
+                    }
+                }.font(.caption).accessibilityElement(children: .contain)
+            } else if resetExplanation && account.command.acknowledgementRequired {
+                Text("Outcome unknown. Reading the existing operation before acknowledgement.").font(.caption)
+            }
+            if let error = runtime.resetErrors[account.id] { Text(error).font(.caption) }
             let windows = account.overviewWindows
             if windows.isEmpty {
                 Text("?").font(.system(size: 30, weight: .semibold))
@@ -267,10 +324,10 @@ struct AccountCard: View {
                     if extra.stale { Text(account.provider == "xai" ? "PAYG stale" : "Extra usage stale").font(.caption) }
                 }
             }
-            if account.provider == "openai" { OpenAICreditDetails(account: account) }
+            if account.provider == "openai" { OpenAICreditDetails(account: account, runtime: runtime) }
             if details {
                 if let state = account.command.state {
-                    Text(state == "unknown" ? "Reset outcome unknown; acknowledgement required in Tally reset controls." : "Redeeming…").font(.caption)
+                    Text(state == "unknown" ? "Outcome unknown; open the card-header warning to acknowledge." : "Redeeming…").font(.caption)
                     Text(account.command.blockingOperationId ?? "").font(.caption).textSelection(.enabled)
                 }
                 AccountDetails(account: account)
