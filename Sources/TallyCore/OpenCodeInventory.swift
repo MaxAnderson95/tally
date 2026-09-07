@@ -9,6 +9,9 @@ struct StoredCredential: Sendable {
     var provider = "opencode-go"
     var refresh: String? = nil
     var workspace: String? = nil
+    var expiresAt: Date? = nil
+
+    var fingerprint: String { identityDigest(key) }
 
     var evidence: IdentityEvidence {
         IdentityEvidence(provider: provider, workspace: workspace.map(identityDigest),
@@ -102,6 +105,7 @@ public struct OpenCodeInventory: Sendable {
             let secret: String
             var refresh: String?
             var workspace: String?
+            var expiresAt: Date?
             do {
                 if provider == "opencode-go" {
                     guard let key = try JSONDecoder().decode(KeyValue.self, from: data).key,
@@ -112,6 +116,7 @@ public struct OpenCodeInventory: Sendable {
                     let value = try JSONDecoder().decode(OAuthValue.self, from: data)
                     guard value.expires.isFinite, value.expires >= 0 else { throw Fault("inventory_schema_incompatible", "Invalid OAuth expiry.") }
                     secret = value.access; refresh = value.refresh
+                    expiresAt = Date(timeIntervalSince1970: value.expires / 1000)
                     if provider == "openai" { workspace = try JSONDecoder().decode(WorkspaceValue.self, from: data).metadata?.accountID }
                 }
             } catch { throw Fault("inventory_schema_incompatible", "An OpenCode credential cannot be decoded.") }
@@ -119,7 +124,7 @@ public struct OpenCodeInventory: Sendable {
                 throw Fault("credentials_unavailable", "A stored credential is invalid. Manage this Account in OpenCode.")
             }
             let credential = StoredCredential(storedID: try text(0), name: try text(1), key: secret, provider: provider,
-                                              refresh: refresh, workspace: workspace.flatMap { $0.isEmpty ? nil : $0 })
+                                              refresh: refresh, workspace: workspace.flatMap { $0.isEmpty ? nil : $0 }, expiresAt: expiresAt)
             if !credentials.contains(where: { $0.evidence.relation(to: credential.evidence) == .same }) { credentials.append(credential) }
         }
         guard try databaseIdentity() == identity else { throw Fault("inventory_unavailable", "OpenCode database changed during the read.") }

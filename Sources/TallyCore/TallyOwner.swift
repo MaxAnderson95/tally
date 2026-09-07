@@ -3,7 +3,8 @@ import Foundation
 public actor TallyOwner {
     private var inventorySource: @Sendable () throws -> InventoryRead
     private var identifySource: (@Sendable () throws -> String)?
-    private let collect: @Sendable (String) async throws -> GoObservation
+    private let collections: @Sendable (StoredCredential) -> [CollectionJob]
+    private let scanActivity: @Sendable () async throws -> Void
     private let clock: @Sendable () -> Date
     private let appBuild: String
     private var databaseIdentity: String?
@@ -12,7 +13,13 @@ public actor TallyOwner {
     private var inventory = Group<Inventory>()
     private var credentials: [String: StoredCredential] = [:]
     private var accounts: [Account] = []
-    private var tasks: [String: Task<Void, Never>] = [:]
+    private struct JobKey: Hashable { var account: String; var job: String }
+    private var tasks: [JobKey: Task<Void, Never>] = [:]
+    private var attempts: [String: [String: AttemptPolicy]] = [:]
+    private var activity = Group<AbsentData>()
+    private var activityPolicy = AttemptPolicy()
+    private var activityTask: Task<Void, Never>?
+    private var nextInventoryAt: Date?
     private var stopping = false
 
     public init(databasePath: String, appBuild: String, storageURL: URL? = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Tally/accounts.json")) {
@@ -21,7 +28,10 @@ public actor TallyOwner {
         identifySource = { try source.databaseIdentity() }
         store = AccountIdentityStore(url: storageURL)
         let usage = GoUsage()
-        collect = { try await usage.collect(key: $0) }
+        collections = { credential in
+            credential.provider == "opencode-go" ? [.go { try await usage.collect(key: credential.key) }] : []
+        }
+        scanActivity = { throw Fault("not_implemented", "Recorded activity scanning is not available in this slice.") }
         clock = { Date() }
         self.appBuild = appBuild
     }
@@ -29,8 +39,14 @@ public actor TallyOwner {
     init(appBuild: String = "test", clock: @escaping @Sendable () -> Date,
          storageURL: URL? = nil,
          inventory: @escaping @Sendable () throws -> InventoryRead,
+         collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
+         scanActivity: @escaping @Sendable () async throws -> Void = { throw Fault("not_implemented", "Recorded activity scanning is not available in this slice.") },
          collect: @escaping @Sendable (String) async throws -> GoObservation) {
-        self.appBuild = appBuild; self.clock = clock; inventorySource = inventory; self.collect = collect
+        self.appBuild = appBuild; self.clock = clock; inventorySource = inventory
+        self.collections = collections ?? { credential in
+            credential.provider == "opencode-go" ? [.go { try await collect(credential.key) }] : []
+        }
+        self.scanActivity = scanActivity
         store = AccountIdentityStore(url: storageURL)
     }
 
@@ -101,6 +117,7 @@ public actor TallyOwner {
         guard let databaseIdentity, var namespace = store.state.namespaces[databaseIdentity] else { return }
         for index in namespace.records.indices {
             if let account = accounts.first(where: { $0.id == namespace.records[index].account.id }) { namespace.records[index].account = account }
+            namespace.records[index].attempts = attempts[namespace.records[index].account.id]
         }
         store.state.namespaces[databaseIdentity] = namespace
     }
@@ -114,7 +131,9 @@ public actor TallyOwner {
     private func leaveNamespace() {
         persist()
         for task in tasks.values { task.cancel() }
-        tasks = [:]; accounts = []; credentials = [:]; inventory = Group(); databaseIdentity = nil
+        activityTask?.cancel(); activityTask = nil; activity = Group(); activityPolicy = AttemptPolicy()
+        tasks = [:]; attempts = [:]; accounts = []; credentials = [:]; inventory = Group(); databaseIdentity = nil
+        nextInventoryAt = nil
     }
 
     private func enterNamespace(_ identity: String) {
@@ -125,6 +144,7 @@ public actor TallyOwner {
             for index in namespace.records.indices { namespace.records[index].account.groups.restoreStale() }
             store.state.namespaces[identity] = namespace
             accounts = namespace.records.filter(\.present).map(\.account)
+            attempts = Dictionary(uniqueKeysWithValues: namespace.records.filter(\.present).map { ($0.account.id, $0.attempts ?? [:]) })
             inventory.data = Inventory(count: accounts.count, namespaceId: namespace.id)
             inventory.observedAt = namespace.observedAt
         } else { store.state.namespaces[identity] = InventoryNamespace() }
@@ -157,6 +177,16 @@ public actor TallyOwner {
                 namespace.records.append(IdentityRecord(evidence: credential.evidence, account: account, present: true))
             }
             account.name = credential.name
+            if let previous = credentials[account.id], previous.fingerprint != credential.fingerprint {
+                for key in tasks.keys where key.account == account.id { tasks[key]?.cancel(); tasks[key] = nil }
+                account.groups.restoreStale()
+            }
+            // Identity continuity does not make a newly rotated access token the rejected credential.
+            for job in attempts[account.id, default: [:]].keys {
+                if let blocked = attempts[account.id]?[job]?.blockedCredential, blocked != credential.fingerprint {
+                    attempts[account.id]?[job]?.blockedCredential = nil
+                }
+            }
             nextAccounts.append(account); nextCredentials[account.id] = credential
         }
         for index in namespace.records.indices where nextCredentials[namespace.records[index].account.id] == nil {
@@ -164,96 +194,191 @@ public actor TallyOwner {
             namespace.records[index].account.groups = AccountGroups()
             namespace.records[index].account.pinned = false
             namespace.records[index].account.pinOrder = nil
+            attempts[namespace.records[index].account.id] = nil
         }
         if !nextAccounts.isEmpty { namespace.initialized = true }
         namespace.observedAt = clock()
-        for id in credentials.keys where nextCredentials[id] == nil { tasks[id]?.cancel(); tasks[id] = nil }
+        for key in tasks.keys where nextCredentials[key.account] == nil { tasks[key]?.cancel(); tasks[key] = nil }
         accounts = nextAccounts; credentials = nextCredentials
         let pins = accounts.filter(\.pinned).sorted(by: accountOrder).map(\.id)
         for index in accounts.indices { accounts[index].pinOrder = pins.firstIndex(of: accounts[index].id) }
         store.state.namespaces[incoming.databaseIdentity] = namespace
         inventory.succeed(Inventory(count: accounts.count, namespaceId: namespace.id), at: clock())
+        inventory.nextAttemptAt = clock().addingTimeInterval(120)
+        nextInventoryAt = inventory.nextAttemptAt
         persist()
     }
 
     @discardableResult public func refresh(accountIDs: [String]? = nil) throws -> RefreshResponse {
+        try refresh(accountIDs: accountIDs, automatic: false)
+    }
+
+    /// The app calls this while awake; the owner decides which work is due.
+    public func tick() {
+        guard !stopping else { return }
+        if nextInventoryAt.map({ $0 <= clock() }) ?? true {
+            _ = try? refresh(accountIDs: nil, automatic: true)
+        } else {
+            if inventory.error == nil {
+                for account in accounts { _ = schedule(id: account.id, at: clock(), automatic: true) }
+            }
+            _ = scheduleActivity(at: clock(), automatic: true)
+        }
+    }
+
+    public func wake() { _ = try? refresh(accountIDs: nil, automatic: false) }
+
+    func activitySnapshot() -> Group<AbsentData> {
+        var value = activity; value.age(at: clock()); return value
+    }
+
+    private func refresh(accountIDs: [String]?, automatic: Bool) throws -> RefreshResponse {
         guard !stopping else { throw Fault("shutting_down", "Tally is shutting down.") }
         if let accountIDs, !Set(accountIDs).isSubset(of: Set(accounts.map(\.id))) {
             throw Fault("account_not_found", "One or more Accounts were not found.")
         }
         let now = clock()
+        inventory.lastAttemptAt = now
         do {
             if let identifySource { enterNamespace(try identifySource()) }
             reconcile(try inventorySource())
         } catch {
             let fault = error as? Fault ?? Fault("inventory_unavailable", "OpenCode inventory could not be read.")
             inventory.fail(fault, at: now)
+            nextInventoryAt = now.addingTimeInterval(120)
+            inventory.nextAttemptAt = nextInventoryAt
             for index in accounts.indices {
                 accounts[index].groups.restoreStale()
-                accounts[index].groups.plan.fail(fault, at: now)
-                accounts[index].groups.quotas.fail(fault, at: now)
+                for group in ReadingGroup.allCases {
+                    group.update(&accounts[index].groups, next: nil, fault: fault)
+                }
             }
+            _ = scheduleActivity(at: now, automatic: automatic)
+            persist()
             throw fault
         }
         if let accountIDs, !Set(accountIDs).isSubset(of: Set(accounts.map(\.id))) { throw Fault("account_not_found", "Account identity changed during inventory refresh.") }
         let requested = accountIDs.map(Set.init)
         let schedules = accounts.filter { requested?.contains($0.id) ?? true }.map { account in
-            AccountSchedule(accountId: account.id, schedule: schedule(id: account.id, at: now))
+            AccountSchedule(accountId: account.id, schedule: schedule(id: account.id, at: now, automatic: automatic))
         }
-        return RefreshResponse(accounts: schedules, activity: Schedule(state: "blocked", reason: Fault("not_implemented", "Recorded activity is not available in this slice.")))
+        let activity = scheduleActivity(at: now, automatic: automatic)
+        persist()
+        return RefreshResponse(accounts: schedules, activity: activity)
     }
 
-    private func schedule(id: String, at now: Date) -> Schedule {
-        if tasks[id] != nil { return Schedule(state: "joined") }
+    private func schedule(id: String, at now: Date, automatic: Bool) -> Schedule {
         guard let index = accounts.firstIndex(where: { $0.id == id }), let credential = credentials[id] else {
             return Schedule(state: "blocked", reason: Fault("account_not_found", "Account no longer exists."))
         }
-        guard credential.provider == "opencode-go" else {
+        let jobs = collections(credential)
+        if credential.expiresAt.map({ $0 <= now }) == true {
+            let fault = Fault("credentials_expired", "Waiting for OpenCode to supply a usable access token. Expiry alone does not require reauthentication.")
+            var policy = attempts[id]?["credential"] ?? AttemptPolicy()
+            let newlyBlocked = policy.blockedCredential != credential.fingerprint
+            _ = policy.finish(at: now, fault: fault, credential: credential.fingerprint)
+            attempts[id, default: [:]]["credential"] = policy
+            for group in ReadingGroup.allCases { group.update(&accounts[index].groups, next: nil, fault: fault) }
+            if newlyBlocked { persist() }
+            return Schedule(state: "blocked", reason: fault)
+        }
+        guard !jobs.isEmpty else {
             return Schedule(state: "blocked", reason: Fault("not_implemented", "This provider's collector is not available in this slice."))
         }
-        if let attempt = accounts[index].groups.quotas.lastAttemptAt, now.timeIntervalSince(attempt) < 15 {
-            return Schedule(state: "deferred", nextAttemptAt: attempt.addingTimeInterval(15))
+        // A rejection applies to the credential across endpoints. Transient failures stay job-local.
+        if attempts[id, default: [:]].values.contains(where: { $0.blockedCredential == credential.fingerprint }) {
+            let fault = Fault("credentials_rejected", "Waiting for changed usable credentials from OpenCode.")
+            for group in ReadingGroup.allCases { group.update(&accounts[index].groups, next: nil, fault: fault) }
+            return Schedule(state: "blocked", reason: fault)
         }
-        accounts[index].groups.plan.refreshing = true
-        accounts[index].groups.quotas.refreshing = true
-        accounts[index].groups.plan.lastAttemptAt = now
-        accounts[index].groups.quotas.lastAttemptAt = now
-        let collect = self.collect
+        let schedules = jobs.map { job -> Schedule in
+            let key = JobKey(account: id, job: job.id)
+            if tasks[key] != nil { return Schedule(state: "joined") }
+            var policy = attempts[id]?[job.id] ?? AttemptPolicy()
+            if let decision = policy.decision(at: now, automatic: automatic) { return decision }
+            policy.start(at: now)
+            attempts[id, default: [:]][job.id] = policy
+            for group in job.groups { group.update(&accounts[index].groups, attempt: now, next: nil, refreshing: true) }
+            let namespace = databaseIdentity
+            tasks[key] = Task {
+                let result: Result<[GroupObservation], Error>
+                do {
+                    let observations = try await job.run()
+                    guard Set(observations.map(\.group)) == Set(job.groups), observations.count == job.groups.count else {
+                        throw Fault("provider_response_invalid", "Collection did not report every expected group.")
+                    }
+                    result = .success(observations)
+                } catch { result = .failure(error) }
+                finish(key: key, credential: credential.fingerprint, namespace: namespace, groups: job.groups, result: result)
+            }
+            persist()
+            return Schedule(state: "started")
+        }
+        // The account summary reports active work first; every group retains its own deadline/error.
+        for state in ["started", "joined", "deferred", "blocked"] {
+            if let schedule = schedules.filter({ $0.state == state }).min(by: { ($0.nextAttemptAt ?? .distantFuture) < ($1.nextAttemptAt ?? .distantFuture) }) { return schedule }
+        }
+        return Schedule(state: "blocked")
+    }
+
+    private func scheduleActivity(at now: Date, automatic: Bool) -> Schedule {
+        if activityTask != nil { return Schedule(state: "joined") }
+        // Explicit refresh always requests a scan, independently of provider cooldowns.
+        if automatic, let decision = activityPolicy.decision(at: now, automatic: true) { return decision }
+        activityPolicy.start(at: now)
+        activity.lastAttemptAt = now; activity.refreshing = true; activity.nextAttemptAt = nil
+        let scan = scanActivity
         let namespace = databaseIdentity
-        tasks[id] = Task {
-            let result: Result<GoObservation, Error>
-            do { result = .success(try await collect(credential.key)) } catch { result = .failure(error) }
-            finish(id: id, key: credential.key, namespace: namespace, result: result)
+        activityTask = Task {
+            var fault: Fault?
+            do { try await scan() }
+            catch { fault = error as? Fault ?? Fault("activity_unavailable", "Recorded activity could not be scanned.") }
+            guard !Task.isCancelled, namespace == databaseIdentity else { return }
+            let now = clock()
+            if let fault = activityPolicy.finish(at: now, fault: fault) { activity.fail(fault, at: now) }
+            else { activity.succeed(nil, at: now) }
+            activity.nextAttemptAt = activityPolicy.nextAttemptAt
+            activityTask = nil
         }
         return Schedule(state: "started")
     }
 
-    private func finish(id: String, key: String, namespace: String?, result: Result<GoObservation, Error>) {
+    private func finish(key: JobKey, credential: String, namespace: String?, groups: [ReadingGroup], result: Result<[GroupObservation], Error>) {
         guard !Task.isCancelled, namespace == databaseIdentity else { return }
-        tasks[id] = nil
-        guard credentials[id]?.key == key, let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        tasks[key] = nil
+        guard credentials[key.account]?.fingerprint == credential, let index = accounts.firstIndex(where: { $0.id == key.account }) else { return }
         let now = clock()
+        var policy = attempts[key.account]?[key.job] ?? AttemptPolicy()
         switch result {
-        case .success(let observation):
-            accounts[index].groups.plan.succeed(Plan(name: "Go"), at: now)
-            accounts[index].groups.quotas.succeed(Quotas(windows: observation.windows), at: now)
-            accounts[index].groups.extraUsage.succeed(nil, at: now)
-            accounts[index].groups.balances.succeed(nil, at: now)
-            accounts[index].groups.resetSummary.succeed(nil, at: now)
-            accounts[index].groups.resetDetails.succeed(nil, at: now)
+        case .success(let observations):
+            _ = policy.finish(at: now, fault: nil)
+            for observation in observations { observation.apply(to: &accounts[index].groups, at: now) }
+            for group in groups { group.update(&accounts[index].groups, next: policy.nextAttemptAt) }
         case .failure(let error):
-            let fault = error as? Fault ?? Fault("provider_unavailable", "OpenCode Go collection failed.")
-            accounts[index].groups.plan.fail(fault, at: now)
-            accounts[index].groups.quotas.fail(fault, at: now)
+            let fault = policy.finish(at: now, fault: error as? Fault ?? Fault("provider_unavailable", "Provider collection failed."), credential: credential)
+            for group in groups { group.update(&accounts[index].groups, next: policy.nextAttemptAt, fault: fault) }
         }
-        if inventory.error != nil { accounts[index].groups.restoreStale() }
+        attempts[key.account, default: [:]][key.job] = policy
+        if attempts[key.account, default: [:]].values.contains(where: { $0.blockedCredential == credential }) {
+            for group in ReadingGroup.allCases {
+                group.update(&accounts[index].groups, next: nil, fault: Fault("credentials_rejected", "Waiting for changed usable credentials from OpenCode."))
+            }
+        }
+        if let fault = inventory.error {
+            for group in ReadingGroup.allCases { group.update(&accounts[index].groups, next: nil, fault: fault) }
+        }
         persist()
     }
 
-    public func waitForCollection() async { for task in Array(tasks.values) { await task.value }; persist() }
+    public func waitForCollection() async {
+        for task in Array(tasks.values) { await task.value }
+        await activityTask?.value
+        persist()
+    }
     public func shutdown() async {
         stopping = true
         for task in tasks.values { task.cancel() }
+        activityTask?.cancel()
         await waitForCollection()
     }
 }

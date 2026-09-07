@@ -8,6 +8,7 @@ final class Runtime: ObservableObject {
     @Published var snapshot: AccountsResponse?
     @Published var listenerError: String?
     @Published var refreshError: String?
+    @Published var refreshSchedule: RefreshResponse?
     @Published var databasePath: String
     @Published var port: String
     @Published var webOrigin: String
@@ -31,9 +32,10 @@ final class Runtime: ObservableObject {
     func start() {
         startServer()
         pollingTask = Task {
+            await owner.wake()
             while !Task.isCancelled {
-                await refresh()
-                do { try await Task.sleep(for: .seconds(120)) } catch { break }
+                await owner.tick()
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
         displayTask = Task {
@@ -44,12 +46,12 @@ final class Runtime: ObservableObject {
             }
         }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+            Task { @MainActor in await self?.owner.wake() }
         }
     }
 
     func refresh() async {
-        do { try await owner.refresh(); refreshError = nil }
+        do { refreshSchedule = try await owner.refresh(); refreshError = nil }
         catch let fault as Fault { refreshError = fault.message }
         catch { refreshError = "Refresh could not be scheduled." }
         snapshot = await owner.snapshot()
@@ -128,6 +130,11 @@ struct Dashboard: View {
                     Button("Retry web/API") { runtime.startServer() }
                 }
                 if let error = runtime.refreshError { Text(error).font(.caption) }
+                if let result = runtime.refreshSchedule {
+                    Text("Refresh: \(result.accounts.map { $0.schedule.state }.joined(separator: ", ")). Activity: \(result.activity.state).")
+                        .font(.caption).accessibilityLabel("Refresh scheduling result")
+                }
+                if let error = runtime.snapshot?.status.inventory.error { Text(error.message).font(.caption) }
                 if runtime.snapshot?.accounts.isEmpty != false {
                     Text("No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Settings.")
                 }
@@ -215,10 +222,14 @@ struct AccountCard: View {
             DisclosureGroup("Details") {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     GridRow { Text("Observed"); Text(account.groups.quotas.observedAt?.formatted() ?? "Never") }
+                    GridRow { Text("Last attempt"); Text(account.groups.quotas.lastAttemptAt?.formatted() ?? "Never") }
+                    GridRow { Text("Collection"); Text(account.groups.quotas.refreshing ? "Refreshing" : account.groups.quotas.stale ? "Stale" : "Current") }
+                    GridRow { Text("Next attempt"); Text(account.groups.quotas.nextAttemptAt?.formatted() ?? "Not scheduled") }
                     GridRow { Text("Timezone"); Text(TimeZone.current.identifier) }
                     if let error = account.groups.quotas.error { GridRow { Text("Error"); Text(error.message) } }
                     ForEach(windows) { window in
                         GridRow { Text("\(window.label) reset"); Text(window.resetAt?.formatted() ?? "Unavailable") }
+                        GridRow { Text("Pacing"); Text(window.pacing.map { "\($0.projectedUsedPercent.formatted(.number.precision(.fractionLength(0))))% projected at reset" } ?? window.pacingUnavailableReason ?? "Unavailable") }
                     }
                 }.font(.caption).padding(.top, 8)
             }.font(.caption)

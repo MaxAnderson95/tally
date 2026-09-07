@@ -17,13 +17,29 @@ struct GoUsage: Sendable {
         catch { throw Fault("provider_unavailable", "OpenCode Go could not be reached.") }
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "OpenCode Go returned no HTTP response.") }
         guard http.statusCode == 200 else {
+            var fault: Fault
             switch http.statusCode {
-            case 401: throw Fault("credentials_rejected", "OpenCode Go rejected this key. Check the Account in OpenCode.")
-            case 403: throw Fault("entitlement_unavailable", "OpenCode Go entitlement could not be verified.")
-            default: throw Fault("provider_unavailable", "OpenCode Go usage request failed (HTTP \(http.statusCode)).")
+            case 401: fault = Fault("credentials_rejected", "OpenCode Go rejected this key. Check the Account in OpenCode.")
+            case 403: fault = Fault("entitlement_unavailable", "OpenCode Go entitlement could not be verified.")
+            default: fault = Fault("provider_unavailable", "OpenCode Go usage request failed (HTTP \(http.statusCode)).")
             }
+            fault.retryAt = Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After"), at: Date())
+            throw fault
         }
         return try Self.decode(data)
+    }
+
+    static func retryAfter(_ header: String?, at now: Date) -> Date? {
+        guard let header else { return nil }
+        if let seconds = Double(header), seconds.isFinite, seconds >= 0 {
+            let date = now.addingTimeInterval(seconds)
+            return date.timeIntervalSince1970.isFinite ? date : nil
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: header).flatMap { $0 > now ? $0 : nil }
     }
 
     static func decode(_ data: Data) throws -> GoObservation {

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { decodeAccounts, percentage, resetLabel } from '../src/api.ts'
+import { decodeAccounts, groupIsStale, percentage, resetLabel, scheduleLabel, type RefreshResponse } from '../src/api.ts'
 
 test('Swift wire fixture retains unknown, measured zero, stale failure, and two pin lines', () => {
   const response = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8'))
@@ -23,4 +23,24 @@ test('Swift wire fixture retains unknown, measured zero, stale failure, and two 
 
 test('incompatible API requires update', () => {
   assert.throws(() => decodeAccounts('{"status":{"apiMajor":2}}'), /incompatible/)
+})
+
+test('scheduling fixture distinguishes started, joined, cooldown, and credential block', () => {
+  const response: RefreshResponse = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/refresh.json', import.meta.url), 'utf8'))
+  assert.deepEqual(response.accounts.map(item => item.schedule.state), ['started', 'joined', 'deferred', 'blocked'])
+  assert.equal(scheduleLabel(response.accounts[0].schedule), 'Refresh requested')
+  assert.equal(scheduleLabel(response.accounts[1].schedule), 'Joined existing refresh')
+  assert.match(scheduleLabel(response.accounts[2].schedule), /^Deferred:/)
+  assert.match(scheduleLabel(response.accounts[3].schedule), /Waiting for changed usable credentials/)
+  assert.equal(response.accounts[2].schedule.nextAttemptAt, response.accounts[2].schedule.reason?.retryAt)
+  assert.equal(response.activity.state, 'started')
+})
+
+test('cached browser readings age without advancing their successful observation', () => {
+  const quota = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0].groups.quotas
+  quota.stale = false
+  const observed = quota.observedAt!
+  assert.equal(groupIsStale(quota, Date.parse(observed) + 299_999), false)
+  assert.equal(groupIsStale(quota, Date.parse(observed) + 300_000), true)
+  assert.equal(quota.observedAt, observed)
 })

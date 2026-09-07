@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { decodeAccounts, percentage, resetLabel, type Account, type AccountsResponse } from './api'
+import { decodeAccounts, groupIsStale, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
 import './style.css'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
   const windows = quota.data?.windows ?? []
-  const stale = quota.stale || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
+  const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   return <article className="account">
     <header className="account-heading">
@@ -27,6 +27,8 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
     <details><summary>Details</summary><dl>
       <dt>Observed</dt><dd>{exact(quota.observedAt)}</dd>
       <dt>Last attempt</dt><dd>{exact(quota.lastAttemptAt)}</dd>
+      <dt>Collection</dt><dd>{quota.refreshing ? 'Refreshing' : stale ? 'Stale' : 'Current'}</dd>
+      <dt>Next attempt</dt><dd>{quota.nextAttemptAt ? exact(quota.nextAttemptAt) : 'Not scheduled'}</dd>
       <dt>Timezone</dt><dd>{timezone}</dd>
       {quota.error && <><dt>Error</dt><dd>{quota.error.message}</dd></>}
       {windows.map(window => <div className="detail-window" key={window.id}>
@@ -42,6 +44,7 @@ function App() {
   const [data, setData] = useState<AccountsResponse>()
   const [error, setError] = useState<string>()
   const [refreshing, setRefreshing] = useState(false)
+  const [schedule, setSchedule] = useState<RefreshResponse>()
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     let stopped = false
@@ -72,6 +75,12 @@ function App() {
     try {
       const response = await fetch('/api/v1/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       if (!response.ok) throw new Error('Refresh could not be scheduled. Check Tally on your Mac.')
+      const result: RefreshResponse = await response.json()
+      setSchedule(result)
+      const current = await fetch('/api/v1/accounts')
+      if (!current.ok) throw new Error('Refresh was scheduled, but updated state could not be read.')
+      setData(decodeAccounts(await current.text()))
+      setError(undefined)
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
@@ -79,6 +88,11 @@ function App() {
   return <main>
     <header className="page-heading"><div><h1>Tally</h1><p>{latest ? `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p></div><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Scheduling…' : 'Refresh'}</button></header>
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
+    {schedule && <div className="notice" role="status">
+      <p>Last refresh request</p>
+      {schedule.accounts.map(item => <p key={item.accountId}>{data?.accounts.find(account => account.id === item.accountId)?.name ?? 'Account'}: {scheduleLabel(item.schedule)}</p>)}
+      <p>Activity: {scheduleLabel(schedule.activity)}</p>
+    </div>}
     {data?.status.inventory.error && <p className="notice" role="alert">{data.status.inventory.error.message}</p>}
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
       <h2>{pinned ? 'Pinned' : 'Other accounts'}</h2>

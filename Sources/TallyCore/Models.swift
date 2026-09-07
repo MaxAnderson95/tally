@@ -33,11 +33,13 @@ public struct Group<Data: Codable & Sendable>: Codable, Sendable {
 
     public init() {}
     mutating func succeed(_ data: Data?, at now: Date) {
-        self.data = data; observedAt = now; lastAttemptAt = now
+        self.data = data; observedAt = now
+        if lastAttemptAt == nil { lastAttemptAt = now }
         stale = false; refreshing = false; error = nil
     }
     mutating func fail(_ fault: Fault, at now: Date) {
-        lastAttemptAt = now; stale = true; refreshing = false; error = fault
+        if lastAttemptAt == nil { lastAttemptAt = now }
+        stale = true; refreshing = false; error = fault
     }
     mutating func age(at now: Date) {
         stale = stale || observedAt.map { now.timeIntervalSince($0) >= 300 } ?? true
@@ -75,13 +77,21 @@ public struct QuotaWindow: Codable, Sendable, Identifiable {
         resetState = resetAt.map { $0 <= now ? "passed" : "scheduled" } ?? "unknown"
         stale = groupStale || resetState == "passed"
         pacing = nil
-        pacingUnavailableReason = "Fresh usage, duration, and a future reset are required."
-        guard !stale, let duration = durationSeconds, let reset = resetAt,
-              reset > now, let used = usedPercent, used > 0 else { return }
+        pacingUnavailableReason = "The reading is stale."
+        guard !stale else { return }
+        pacingUnavailableReason = "Window duration is unknown or invalid."
+        guard let duration = durationSeconds, duration.isFinite, duration > 0 else { return }
+        pacingUnavailableReason = "A future reset time is required."
+        guard let reset = resetAt, reset > now else { return }
+        pacingUnavailableReason = "Positive observed usage is required."
+        guard let used = usedPercent, used.isFinite, used > 0 else { return }
         let elapsed = now.timeIntervalSince(reset.addingTimeInterval(-duration))
+        pacingUnavailableReason = "The elapsed window must be at least 60 seconds and 1% of its duration, and less than the full duration."
         guard elapsed >= max(60, 0.01 * duration), elapsed < duration else { return }
         let projected = used * duration / elapsed
         let exhaustion = reset.addingTimeInterval(-duration + elapsed * 100 / used)
+        pacingUnavailableReason = "The projection is outside the supported numeric range."
+        guard projected.isFinite, exhaustion.timeIntervalSince1970.isFinite else { return }
         pacing = Pacing(projectedUsedPercent: projected, sparePercent: 100 - projected,
                         runOutAt: exhaustion < reset ? exhaustion : nil,
                         runOutReason: exhaustion < reset ? nil : "Allowance is projected to last through reset.")

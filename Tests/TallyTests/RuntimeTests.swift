@@ -8,6 +8,10 @@ func fixture(_ name: String) throws -> Data {
 }
 
 @Test func decodesSharedWireFixture() throws {
+    let refresh = try Wire.decoder().decode(RefreshResponse.self, from: fixture("refresh"))
+    #expect(refresh.accounts.map { $0.schedule.state } == ["started", "joined", "deferred", "blocked"])
+    #expect(refresh.accounts[2].schedule.nextAttemptAt == refresh.accounts[2].schedule.reason?.retryAt)
+    #expect(refresh.activity.state == "started")
     let response = try Wire.decoder().decode(AccountsResponse.self, from: fixture("accounts"))
     #expect(response.accounts[0].pin.lines.count == 2)
     #expect(response.accounts[0].groups.quotas.data?.windows[1].remainingPercent == nil)
@@ -64,6 +68,8 @@ func fixture(_ name: String) throws -> Data {
     let credentials = try OpenCodeInventory(path: path).read().credentials
     #expect(credentials.map(\.name) == ["Go Personal", "WORK", "Claude", "Workspace A", "Workspace B", "Grok"])
     #expect(credentials.prefix(2).map(\.key) == ["key-a", "key-b"])
+    #expect(credentials[2].expiresAt == Date(timeIntervalSince1970: 0))
+    #expect(credentials[0].expiresAt == nil)
     #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == before)
     #expect(throws: Fault.self) { try OpenCodeInventory(path: path + "-missing").read() }
     #expect(!FileManager.default.fileExists(atPath: path + "-missing"))
@@ -367,4 +373,260 @@ private final class InventoryScenario: @unchecked Sendable {
     try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: path)
     try await owner.setDatabasePath(alias)
     #expect(await owner.snapshot().accounts[0].groups.quotas.stale == false)
+}
+
+private final class SchedulingScenario: @unchecked Sendable {
+    private let lock = NSLock()
+    private var time = Date(timeIntervalSince1970: 1_900_000_000)
+    private var counts: [String: Int] = [:]
+    private var failures: [String: Fault] = [:]
+    private var entries = [StoredCredential(storedID: "a", name: "A", key: "a"), StoredCredential(storedID: "b", name: "B", key: "b")]
+    func now() -> Date { lock.withLock { time } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
+    func count(_ key: String) -> Int { lock.withLock { counts[key, default: 0] } }
+    func fail(_ key: String, _ fault: Fault?) { lock.withLock { failures[key] = fault } }
+    func set(_ entries: [StoredCredential]) { lock.withLock { self.entries = entries } }
+    func inventory() -> InventoryRead {
+        lock.withLock { counts["inventory", default: 0] += 1; return InventoryRead(databaseIdentity: "db", credentials: entries) }
+    }
+    func call(_ key: String) throws {
+        try lock.withLock { counts[key, default: 0] += 1; if let fault = failures[key] { throw fault } }
+    }
+    func owner(storage: URL? = nil) -> TallyOwner {
+        TallyOwner(clock: { self.now() }, storageURL: storage, inventory: { self.inventory() }, scanActivity: { try self.call("activity") }, collect: { key in
+            try self.call(key)
+            return GoObservation(windows: [QuotaWindow(id: "rolling", label: "5-hour", cadence: "rolling", durationSeconds: 18_000,
+                                                       durationSource: "verified_mapping", usedPercent: 20, resetAt: self.now().addingTimeInterval(9_000))])
+        })
+    }
+}
+
+@Test func controlledCadenceWakeMinimumAndRefreshValidation() async throws {
+    let scenario = SchedulingScenario()
+    let owner = scenario.owner()
+    await owner.tick(); await owner.waitForCollection()
+    let initial = await owner.snapshot()
+    #expect(scenario.count("a") == 1 && scenario.count("b") == 1 && scenario.count("activity") == 1)
+    #expect(initial.accounts[0].groups.quotas.nextAttemptAt == scenario.now().addingTimeInterval(120))
+    scenario.advance(119)
+    await owner.tick(); await owner.waitForCollection()
+    #expect(scenario.count("a") == 1 && scenario.count("inventory") == 1)
+    scenario.advance(1)
+    await owner.tick(); await owner.waitForCollection()
+    #expect(scenario.count("a") == 2 && scenario.count("inventory") == 2)
+    let id = initial.accounts[0].id
+    let duplicate = try await owner.refresh(accountIDs: [id, id])
+    #expect(duplicate.accounts.count == 1 && duplicate.accounts[0].schedule.state == "deferred")
+    await owner.waitForCollection()
+    let scans = scenario.count("activity")
+    await #expect(throws: Fault.self) { try await owner.refresh(accountIDs: [id, "unknown"]) }
+    #expect(scenario.count("activity") == scans)
+    #expect(try await owner.refresh(accountIDs: []).accounts.isEmpty)
+    await owner.waitForCollection()
+    #expect(scenario.count("activity") == scans + 1 && scenario.count("a") == 2)
+    scenario.advance(14)
+    #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "deferred")
+    await owner.waitForCollection()
+    scenario.advance(1)
+    #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "started")
+    await owner.waitForCollection()
+    scenario.advance(15)
+    await owner.wake(); await owner.waitForCollection()
+    #expect(scenario.count("a") == 4 && scenario.count("b") == 3)
+    #expect(await owner.snapshot().accounts[0].groups.quotas.observedAt == scenario.now())
+}
+
+@Test func backoffRetryAfterAndRestartRetainIndependentLastGoodReadings() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let scenario = SchedulingScenario()
+    let storage = directory.appendingPathComponent("readings.json")
+    let owner = scenario.owner(storage: storage)
+    try await owner.refresh(); await owner.waitForCollection()
+    let observed = scenario.now()
+    scenario.fail("a", Fault("provider_unavailable", "Synthetic failure."))
+    scenario.advance(15)
+    for delay: TimeInterval in [120, 240, 480, 900, 900] {
+        let response = try await owner.refresh()
+        #expect(response.accounts[0].schedule.state == "started")
+        await owner.waitForCollection()
+        let snapshot = await owner.snapshot()
+        #expect(snapshot.accounts[0].groups.quotas.observedAt == observed)
+        #expect(snapshot.accounts[0].groups.quotas.data?.windows[0].usedPercent == 20)
+        #expect(snapshot.accounts[0].groups.quotas.nextAttemptAt == scenario.now().addingTimeInterval(delay))
+        #expect(snapshot.accounts[0].groups.quotas.error?.retryAt == scenario.now().addingTimeInterval(delay))
+        #expect(!snapshot.accounts[1].groups.quotas.stale)
+        let activityCalls = scenario.count("activity")
+        #expect(try await owner.refresh().accounts[0].schedule.state == "deferred")
+        await owner.waitForCollection()
+        #expect(scenario.count("activity") == activityCalls + 1)
+        scenario.advance(delay)
+    }
+    var longer = Fault("provider_unavailable", "Rate limited.")
+    longer.retryAt = scenario.now().addingTimeInterval(3_600)
+    scenario.fail("a", longer)
+    try await owner.refresh(); await owner.waitForCollection()
+    let restarted = scenario.owner(storage: storage)
+    let restored = try await restarted.refresh()
+    #expect(restored.accounts[0].schedule.state == "deferred")
+    #expect(restored.accounts[0].schedule.nextAttemptAt == longer.retryAt)
+    #expect(await restarted.snapshot().accounts[0].groups.quotas.stale)
+    #expect(await restarted.snapshot().accounts[0].groups.quotas.observedAt == observed)
+    let calls = scenario.count("a")
+    scenario.advance(900)
+    await restarted.wake(); await restarted.waitForCollection()
+    #expect(scenario.count("a") == calls)
+    scenario.fail("a", nil); scenario.advance(2_700)
+    await restarted.tick(); await restarted.waitForCollection()
+    #expect(scenario.count("a") == calls + 1)
+    #expect(await restarted.snapshot().accounts[0].groups.quotas.nextAttemptAt == scenario.now().addingTimeInterval(120))
+    #expect(!String(decoding: try Data(contentsOf: storage), as: UTF8.self).contains("\"key\""))
+}
+
+@Test func rejectedAndExpiredCredentialsRequireChangedUsableTokens() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let scenario = SchedulingScenario()
+    var credential = StoredCredential(storedID: "a", name: "A", key: "old", refresh: "continuity", expiresAt: scenario.now().addingTimeInterval(60))
+    scenario.set([credential])
+    scenario.fail("old", Fault("credentials_rejected", "Rejected."))
+    let owner = scenario.owner(storage: directory.appendingPathComponent("state.json"))
+    try await owner.refresh(); await owner.waitForCollection()
+    let id = try #require(await owner.snapshot().accounts.first?.id)
+    scenario.advance(30)
+    #expect(try await owner.refresh().accounts[0].schedule.state == "blocked")
+    let restarted = scenario.owner(storage: directory.appendingPathComponent("state.json"))
+    #expect(try await restarted.refresh().accounts[0].schedule.state == "blocked")
+    #expect(scenario.count("old") == 1)
+    credential.key = "new-expired"; credential.expiresAt = scenario.now()
+    scenario.set([credential])
+    #expect(try await restarted.refresh().accounts[0].schedule.reason?.code == "credentials_expired")
+    #expect(scenario.count("new-expired") == 0)
+    credential.expiresAt = scenario.now().addingTimeInterval(600)
+    scenario.set([credential])
+    #expect(try await restarted.refresh().accounts[0].schedule.state == "blocked")
+    credential.key = "usable"
+    scenario.set([credential])
+    #expect(try await restarted.refresh().accounts[0].schedule.state == "started")
+    await restarted.waitForCollection()
+    #expect(await restarted.snapshot().accounts[0].id == id)
+    #expect(scenario.count("usable") == 1)
+}
+
+@Test func independentGroupsKeepSuccessAbsenceAttemptAndFailureSeparate() async throws {
+    let scenario = SchedulingScenario()
+    let (values, continuation) = AsyncStream<[GroupObservation]>.makeStream()
+    let owner = TallyOwner(clock: { scenario.now() }, inventory: { scenario.inventory() }, collections: { _ in
+        [CollectionJob(id: "plan", groups: [.plan]) {
+            for await value in values { return value }
+            throw Fault("provider_unavailable", "Optional metadata failed.")
+        }, CollectionJob(id: "usage", groups: [.quotas]) {
+            [.quotas(Quotas(windows: []))]
+        }]
+    }, collect: { _ in throw Fault("unexpected", "Uses independent jobs.") })
+    scenario.set([StoredCredential(storedID: "a", name: "A", key: "a")])
+    try await owner.refresh()
+    let started = scenario.now()
+    #expect(try await owner.refresh().accounts[0].schedule.state == "joined")
+    scenario.advance(30)
+    continuation.yield([.plan(Plan(name: "Example"))])
+    await owner.waitForCollection()
+    var groups = await owner.snapshot().accounts[0].groups
+    #expect(groups.plan.lastAttemptAt == started)
+    #expect(groups.plan.observedAt == scenario.now())
+    #expect(groups.quotas.data?.windows.isEmpty == true)
+    scenario.advance(15)
+    try await owner.refresh()
+    continuation.yield([.plan(nil)])
+    await owner.waitForCollection()
+    groups = await owner.snapshot().accounts[0].groups
+    #expect(groups.plan.data == nil && groups.plan.observedAt == scenario.now() && groups.plan.error == nil)
+    let lastGood = groups.plan.observedAt
+    continuation.finish()
+    scenario.advance(15)
+    try await owner.refresh(); await owner.waitForCollection()
+    groups = await owner.snapshot().accounts[0].groups
+    #expect(groups.plan.stale && groups.plan.observedAt == lastGood)
+    #expect(!groups.quotas.stale && groups.quotas.observedAt == scenario.now())
+    scenario.advance(15)
+    #expect(try await owner.refresh().accounts[0].schedule.state == "started")
+    await owner.waitForCollection()
+    groups = await owner.snapshot().accounts[0].groups
+    #expect(groups.plan.observedAt == lastGood && !groups.quotas.stale)
+}
+
+@Test func corruptedCacheStillCollectsAndAgeDoesNotChangeObservations() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("state.json")
+    try Data("{damaged".utf8).write(to: storage)
+    let scenario = SchedulingScenario()
+    let owner = scenario.owner(storage: storage)
+    try await owner.refresh(); await owner.waitForCollection()
+    let first = await owner.snapshot()
+    scenario.advance(299)
+    #expect(await owner.snapshot().accounts[0].groups.quotas.stale == false)
+    scenario.advance(1)
+    let aged = await owner.snapshot()
+    #expect(aged.accounts[0].groups.quotas.stale)
+    #expect(aged.accounts[0].groups.quotas.observedAt == first.accounts[0].groups.quotas.observedAt)
+    #expect(aged.accounts[0].groups.quotas.data?.windows[0].pacing == nil)
+    #expect(scenario.count("a") == 1)
+}
+
+@Test func pacingBoundariesAndRetryAfterParsing() throws {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    func window(duration: Double?, elapsed: Double, used: Double? = 20) -> QuotaWindow {
+        QuotaWindow(id: "quota", label: "Quota", cadence: "other", durationSeconds: duration, durationSource: duration == nil ? "unknown" : "provider",
+                    usedPercent: used, resetAt: now.addingTimeInterval((duration ?? 1_000) - elapsed))
+    }
+    for (duration, minimum) in [(1_000.0, 60.0), (18_000.0, 180.0)] {
+        var early = window(duration: duration, elapsed: minimum - 0.001)
+        early.derive(at: now, groupStale: false)
+        #expect(early.pacing == nil)
+        var exact = window(duration: duration, elapsed: minimum)
+        exact.derive(at: now, groupStale: false)
+        #expect(exact.pacing?.projectedUsedPercent == 20 * duration / minimum)
+        #expect(exact.pacing!.sparePercent < 0 && exact.pacing!.runOutAt! < exact.resetAt!)
+    }
+    var lasts = window(duration: 1_000, elapsed: 500, used: 10)
+    lasts.derive(at: now, groupStale: false)
+    #expect(lasts.pacing?.projectedUsedPercent == 20 && lasts.pacing?.sparePercent == 80)
+    #expect(lasts.pacing?.runOutAt == nil && lasts.pacing?.runOutReason != nil)
+    for var invalid in [window(duration: nil, elapsed: 500), window(duration: 0, elapsed: 0), window(duration: 1_000, elapsed: -1),
+                        window(duration: 1_000, elapsed: 1_000), window(duration: 1_000, elapsed: 500, used: 0), window(duration: 1_000, elapsed: 500, used: nil)] {
+        invalid.derive(at: now, groupStale: false)
+        #expect(invalid.pacing == nil && invalid.pacingUnavailableReason != nil)
+    }
+    #expect(GoUsage.retryAfter("3600", at: now) == now.addingTimeInterval(3_600))
+    #expect(GoUsage.retryAfter("Wed, 21 Oct 2037 07:28:00 GMT", at: now) != nil)
+    #expect(GoUsage.retryAfter("invalid", at: now) == nil)
+    #expect(GoUsage.retryAfter("-5", at: now) == nil)
+    #expect(GoUsage.retryAfter("inf", at: now) == nil)
+}
+
+@Test func activityFailureKeepsItsLastSuccessAndNeverStalesProviderGroups() async throws {
+    let scenario = SchedulingScenario()
+    let owner = scenario.owner()
+    try await owner.refresh(); await owner.waitForCollection()
+    let success = await owner.activitySnapshot()
+    #expect(success.observedAt == scenario.now() && !success.stale)
+    scenario.advance(15)
+    scenario.fail("activity", Fault("activity_unavailable", "Synthetic scan failure."))
+    try await owner.refresh(); await owner.waitForCollection()
+    let failed = await owner.activitySnapshot()
+    #expect(failed.stale && failed.observedAt == success.observedAt && failed.lastAttemptAt == scenario.now())
+    #expect(await owner.snapshot().accounts.allSatisfy { !$0.groups.quotas.stale })
+    let calls = scenario.count("activity")
+    scenario.fail("activity", nil)
+    #expect(try await owner.refresh(accountIDs: []).activity.state == "started")
+    await owner.waitForCollection()
+    #expect(scenario.count("activity") == calls + 1)
+    scenario.advance(300)
+    #expect(await owner.activitySnapshot().stale)
+    let unconnected = TallyOwner(clock: { scenario.now() }, inventory: { scenario.inventory() }, collect: { _ in GoObservation(windows: []) })
+    try await unconnected.refresh(accountIDs: []); await unconnected.waitForCollection()
+    #expect(await unconnected.activitySnapshot().observedAt == nil)
+    #expect(await unconnected.activitySnapshot().error?.code == "not_implemented")
 }

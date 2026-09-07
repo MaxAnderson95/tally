@@ -24,6 +24,7 @@ struct IdentityRecord: Codable {
     var evidence: IdentityEvidence
     var account: Account
     var present: Bool
+    var attempts: [String: AttemptPolicy]? = nil
 }
 
 struct InventoryNamespace: Codable {

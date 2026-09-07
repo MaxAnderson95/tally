@@ -28,6 +28,17 @@ export type Status = {
   recoveryStorage: { available: boolean; error: Fault | null }
 }
 export type AccountsResponse = { status: Status; accounts: Account[] }
+export type Schedule = { state: 'started' | 'joined' | 'deferred' | 'blocked'; nextAttemptAt: string | null; reason: Fault | null }
+export type RefreshResponse = { accounts: { accountId: string; schedule: Schedule }[]; activity: Schedule }
+
+export function scheduleLabel(schedule: Schedule): string {
+  const label = { started: 'Refresh requested', joined: 'Joined existing refresh', deferred: 'Deferred', blocked: 'Blocked' }[schedule.state]
+  return schedule.reason ? `${label}: ${schedule.reason.message}` : label
+}
+
+export function groupIsStale(group: Group<unknown>, now = Date.now()): boolean {
+  return group.stale || group.observedAt === null || now - Date.parse(group.observedAt) >= 300_000
+}
 
 export function decodeAccounts(text: string): AccountsResponse {
   const result: AccountsResponse = JSON.parse(text)
