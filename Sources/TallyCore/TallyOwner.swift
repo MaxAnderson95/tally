@@ -4,7 +4,8 @@ public actor TallyOwner {
     private var inventorySource: @Sendable () throws -> InventoryRead
     private var identifySource: (@Sendable () throws -> String)?
     private let collections: @Sendable (StoredCredential) -> [CollectionJob]
-    private let scanActivity: @Sendable () async throws -> Void
+    private var scanActivity: @Sendable (Date) async throws -> ActivityScan
+    private let timezone: @Sendable () -> TimeZone
     private let clock: @Sendable () -> Date
     private let appBuild: String
     private var databaseIdentity: String?
@@ -16,8 +17,8 @@ public actor TallyOwner {
     private struct JobKey: Hashable { var account: String; var job: String }
     private var tasks: [JobKey: Task<Void, Never>] = [:]
     private var attempts: [String: [String: AttemptPolicy]] = [:]
-    private var activity = Group<AbsentData>()
-    private var activityPolicy = AttemptPolicy()
+    private var activityViews: [String: Group<ActivityData>] = [:]
+    private var activity = Group<ActivityData>()
     private var activityTask: Task<Void, Never>?
     private var nextInventoryAt: Date?
     private var stopping = false
@@ -40,7 +41,8 @@ public actor TallyOwner {
             default: []
             }
         }
-        scanActivity = { throw Fault("not_implemented", "Recorded activity scanning is not available in this slice.") }
+        scanActivity = { cutoff in try await Task.detached { try OpenCodeActivity(path: databasePath).read(cutoff: cutoff) }.value }
+        timezone = { TimeZone.current }
         clock = { Date() }
         self.appBuild = appBuild
     }
@@ -49,13 +51,15 @@ public actor TallyOwner {
          storageURL: URL? = nil,
          inventory: @escaping @Sendable () throws -> InventoryRead,
          collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
-         scanActivity: @escaping @Sendable () async throws -> Void = { throw Fault("not_implemented", "Recorded activity scanning is not available in this slice.") },
+         timezone: @escaping @Sendable () -> TimeZone = { TimeZone.current },
+         scanActivity: @escaping @Sendable (Date) async throws -> ActivityScan = { _ in throw Fault("not_implemented", "No test activity source configured.") },
          collect: @escaping @Sendable (String) async throws -> GoObservation) {
         self.appBuild = appBuild; self.clock = clock; inventorySource = inventory
         self.collections = collections ?? { credential in
             credential.provider == "opencode-go" ? [.go { try await collect(credential.key) }] : []
         }
         self.scanActivity = scanActivity
+        self.timezone = timezone
         store = AccountIdentityStore(url: storageURL)
     }
 
@@ -95,6 +99,7 @@ public actor TallyOwner {
         let source = OpenCodeInventory(path: path)
         inventorySource = { try source.read() }
         identifySource = { try source.databaseIdentity() }
+        scanActivity = { cutoff in try await Task.detached { try OpenCodeActivity(path: path).read(cutoff: cutoff) }.value }
         if (try? source.databaseIdentity()) != databaseIdentity { leaveNamespace() }
         try refresh(accountIDs: [])
     }
@@ -138,7 +143,7 @@ public actor TallyOwner {
     private func leaveNamespace() {
         persist()
         for task in tasks.values { task.cancel() }
-        activityTask?.cancel(); activityTask = nil; activity = Group(); activityPolicy = AttemptPolicy()
+        activityTask?.cancel(); activityTask = nil; activity = Group(); activityViews = [:]
         tasks = [:]; attempts = [:]; accounts = []; credentials = [:]; inventory = Group(); databaseIdentity = nil
         nextInventoryAt = nil
     }
@@ -155,6 +160,9 @@ public actor TallyOwner {
             inventory.data = Inventory(count: accounts.count, namespaceId: namespace.id)
             inventory.observedAt = namespace.observedAt
         } else { store.state.namespaces[identity] = InventoryNamespace() }
+        activityViews = store.state.namespaces[identity]?.activity ?? [:]
+        for key in activityViews.keys { activityViews[key]?.stale = true; activityViews[key]?.refreshing = false }
+        activity = activityViews[ActivityRange.today.rawValue] ?? Group()
     }
 
     private func reconcile(_ incoming: InventoryRead) {
@@ -240,8 +248,28 @@ public actor TallyOwner {
 
     public func wake() { _ = try? refresh(accountIDs: nil, automatic: false) }
 
-    func activitySnapshot() -> Group<AbsentData> {
-        var value = activity; value.age(at: clock()); return value
+    func activitySnapshot() -> Group<ActivityData> {
+        activityResponse().activity
+    }
+
+    public func activityResponse(range: ActivityRange = .today) -> ActivityResponse {
+        var value = activityViews[range.rawValue] ?? activity
+        value.lastAttemptAt = activity.lastAttemptAt; value.refreshing = activity.refreshing
+        value.nextAttemptAt = activity.nextAttemptAt; value.error = activity.error
+        value.stale = value.stale || activity.stale
+        value.age(at: clock())
+        if let data = value.data, data.timezone != timezone().identifier {
+            value.stale = true
+            value.error = value.error ?? Fault("activity_timezone_changed", "Mac timezone changed; cached buckets remain in \(data.timezone) until a successful scan.")
+        }
+        if let data = value.data, let zone = TimeZone(identifier: data.timezone) {
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
+            if data.trend.days.last?.startAt != calendar.startOfDay(for: clock()) {
+                value.stale = true
+                value.error = value.error ?? Fault("activity_calendar_changed", "A new calendar day is awaiting a scan; the last observed range is retained.")
+            }
+        }
+        return ActivityResponse(status: snapshot().status, activity: value)
     }
 
     private func refresh(accountIDs: [String]?, automatic: Bool) throws -> RefreshResponse {
@@ -336,21 +364,35 @@ public actor TallyOwner {
     private func scheduleActivity(at now: Date, automatic: Bool) -> Schedule {
         if activityTask != nil { return Schedule(state: "joined") }
         // Explicit refresh always requests a scan, independently of provider cooldowns.
-        if automatic, let decision = activityPolicy.decision(at: now, automatic: true) { return decision }
-        activityPolicy.start(at: now)
+        if automatic, let next = activity.nextAttemptAt, now < next {
+            return Schedule(state: "deferred", nextAttemptAt: next)
+        }
         activity.lastAttemptAt = now; activity.refreshing = true; activity.nextAttemptAt = nil
         let scan = scanActivity
         let namespace = databaseIdentity
+        let zone = timezone()
+        let namespaceID = namespace.flatMap { store.state.namespaces[$0]?.id }
         activityTask = Task {
             var fault: Fault?
-            do { try await scan() }
+            var views: [String: ActivityData]?
+            do {
+                let result = try await scan(now)
+                guard result.databaseIdentity == namespace, let namespaceID else { throw Fault("activity_unavailable", "Activity source identity changed; refresh the inventory.") }
+                views = await Task.detached { result.derive(namespace: namespaceID, cutoff: now, timezone: zone) }.value
+            }
             catch { fault = error as? Fault ?? Fault("activity_unavailable", "Recorded activity could not be scanned.") }
             guard !Task.isCancelled, namespace == databaseIdentity else { return }
-            let now = clock()
-            if let fault = activityPolicy.finish(at: now, fault: fault) { activity.fail(fault, at: now) }
-            else { activity.succeed(nil, at: now) }
-            activity.nextAttemptAt = activityPolicy.nextAttemptAt
+            if let fault { activity.fail(fault, at: now) }
+            else if let views {
+                activityViews = views.mapValues { data in
+                    var group = Group<ActivityData>(); group.succeed(data, at: now); return group
+                }
+                activity = activityViews[ActivityRange.today.rawValue]!
+                if let namespace { store.state.namespaces[namespace]?.activity = activityViews }
+            }
+            activity.nextAttemptAt = clock().addingTimeInterval(120)
             activityTask = nil
+            persist()
         }
         return Schedule(state: "started")
     }

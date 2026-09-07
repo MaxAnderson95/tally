@@ -85,12 +85,19 @@ public struct TallyResponder: HTTPResponder {
                 return try json(await owner.refresh(accountIDs: input.accountIds))
             }
             let detailPrefix = "/api/v1/accounts/"
-            let knownRead = path == "/api/v1/status" || path == "/api/v1/accounts" ||
+            let knownRead = path == "/api/v1/status" || path == "/api/v1/accounts" || path == "/api/v1/activity" ||
                 (path.hasPrefix(detailPrefix) && !path.dropFirst(detailPrefix.count).contains("/") && path.count > detailPrefix.count)
             guard knownRead else { return failure(.notFound, Fault("not_found", "API route not found.")) }
             guard request.method == .get else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use GET for cached readings.")) }
             if path == "/api/v1/status" { return try json(await owner.snapshot().status) }
             if path == "/api/v1/accounts" { return try json(await owner.snapshot()) }
+            if path == "/api/v1/activity" {
+                let ranges = URLComponents(string: "http://localhost" + request.uri.string)?.queryItems?.filter { $0.name == "range" } ?? []
+                guard ranges.count <= 1, let range = ActivityRange(rawValue: ranges.first.map { $0.value ?? "" } ?? "today") else {
+                    return failure(.badRequest, Fault("invalid_request", "Choose today, yesterday, or last30days."))
+                }
+                return try json(await owner.activityResponse(range: range))
+            }
             return try json(await owner.account(id: String(path.dropFirst(detailPrefix.count))))
         } catch let fault as Fault {
             return failure(fault.code == "account_not_found" ? .notFound : .serviceUnavailable, fault)

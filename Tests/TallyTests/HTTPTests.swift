@@ -24,8 +24,9 @@ private struct AuthorityResponder: HTTPResponder {
         InventoryRead(databaseIdentity: "test-db", credentials: providerOrder.map {
             StoredCredential(storedID: $0, name: $0, key: "private-\($0)", provider: $0)
         })
-    }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
+    }, scanActivity: { cutoff in ActivityScan(databaseIdentity: "test-db", rows: [ActivityRow(created: cutoff.addingTimeInterval(-1), provider: "opencode-go", model: "grok", tokens: Tokens(input: 7, total: 7), cost: 0)]) }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
     try await owner.refresh(accountIDs: [])
+    await owner.waitForCollection()
     let initial = await owner.snapshot()
     let pins = [initial.accounts[3].id, initial.accounts[0].id]
     try await owner.setPins(pins)
@@ -38,10 +39,25 @@ private struct AuthorityResponder: HTTPResponder {
         try await client.execute(uri: "/api/v1/refresh", method: .post, headers: [testAuthority: "tally.tail1234.ts.net", .contentType: "application/json", .origin: "https://tally.tail1234.ts.net"], body: .init(string: "{}")) { response in
             #expect(response.status == .ok)
         }
-        for path in ["/", "/api/v1/status", "/api/v1/accounts"] {
+        for path in ["/", "/api/v1/status", "/api/v1/accounts", "/api/v1/activity", "/api/v1/activity?range=yesterday", "/api/v1/activity?range=last30days"] {
             try await client.execute(uri: path, method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
                 #expect(response.status == .ok)
             }
+        }
+        for query in ["range=bad", "range=", "range=today&range=yesterday"] {
+            try await client.execute(uri: "/api/v1/activity?\(query)", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+                #expect(response.status == .badRequest)
+            }
+        }
+        try await client.execute(uri: "/api/v1/activity", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+            let decoded = try Wire.decoder().decode(ActivityResponse.self, from: Data(response.body.readableBytesView))
+            let native = await owner.activityResponse()
+            #expect(try Wire.encoder().encode(decoded.activity) == Wire.encoder().encode(native.activity))
+            #expect(decoded.activity.data?.trend.days.count == 30)
+            #expect(decoded.activity.data?.totals.tokens?.total == 7)
+        }
+        try await client.execute(uri: "/api/v1/activity", method: .post, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]) { response in
+            #expect(response.status == .methodNotAllowed)
         }
         try await client.execute(uri: "/api/v1/accounts", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
             let data = Data(response.body.readableBytesView)

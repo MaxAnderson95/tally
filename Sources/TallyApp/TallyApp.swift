@@ -7,6 +7,8 @@ import Combine
 @MainActor
 final class Runtime: ObservableObject {
     @Published var snapshot: AccountsResponse?
+    @Published var activity: ActivityResponse?
+    @Published var activityRange = ActivityRange.today
     @Published var listenerError: String?
     @Published var refreshError: String?
     @Published var refreshSchedule: RefreshResponse?
@@ -42,6 +44,7 @@ final class Runtime: ObservableObject {
         displayTask = Task {
             while !Task.isCancelled {
                 snapshot = await owner.snapshot()
+                activity = await owner.activityResponse(range: activityRange)
                 storageError = await owner.settingsError()?.message
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
@@ -124,7 +127,7 @@ struct Dashboard: View {
                     Spacer()
                     Button("Refresh") { Task { await runtime.refresh() } }
                 }
-                if let updated = runtime.snapshot?.accounts.compactMap(\.latestObservation).max() {
+                if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
                     Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
                 } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary) }
                 if let error = runtime.listenerError {
@@ -155,8 +158,7 @@ struct Dashboard: View {
                         }
                     }
                 }
-                Text("Recorded OpenCode activity").font(.headline)
-                Text("Activity is not available in this build.").font(.caption).foregroundStyle(.secondary)
+                RecordedActivity(runtime: runtime)
                 Divider()
                 HStack {
                     Button("Settings") { settings.toggle() }

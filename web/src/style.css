@@ -16,6 +16,14 @@ button:disabled { opacity: .6; cursor: wait; }
 .accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .activity-region { position: sticky; top: 24px; background: var(--surface); border: 1px solid var(--line); padding: 16px; border-radius: 10px; margin-top: 38px; }
 .activity-region p { font-size: 13px; color: var(--muted); margin-top: 10px; }
+.activity-region { min-width: 0; overflow-wrap: anywhere; }
+.activity-ranges { display: flex; gap: 4px; margin: 14px 0; }
+.activity-ranges button { flex: 1; padding: 7px 4px; }
+.activity-ranges button[aria-pressed="true"] { background: var(--track); border-color: currentColor; }
+.activity-region .activity-total { color: inherit; font-size: 20px; font-weight: 600; }
+.activity-trend { height: 96px; display: flex; gap: 3px; align-items: end; margin: 14px 0 8px; }
+.activity-trend > div { flex: 1; background: var(--track); min-width: 0; }
+.activity-trend > .selected { background: currentColor; }
 .account { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; align-self: start; }
 .account-heading { display: flex; align-items: start; gap: 8px; margin-bottom: 6px; }
 .account-heading > div { flex: 1; min-width: 0; }

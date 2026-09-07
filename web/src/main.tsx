@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
 import './style.css'
 import { ProviderLogo, providerName, providers } from './ProviderLogo'
+import { RecordedActivity } from './RecordedActivity'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
@@ -107,6 +108,7 @@ function App() {
   const [error, setError] = useState<string>()
   const [refreshing, setRefreshing] = useState(false)
   const [schedule, setSchedule] = useState<RefreshResponse>()
+  const [activityObserved, setActivityObserved] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const build = useRef<string>(undefined)
   useEffect(() => {
@@ -149,7 +151,7 @@ function App() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
-  const latest = data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)).filter(date => date !== null).sort().at(-1)
+  const latest = [...data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)) ?? [], activityObserved].filter(date => date !== null).sort().at(-1)
   return <main>
     <header className="page-heading"><div><h1>Tally</h1><p>{latest ? `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p></div><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Scheduling…' : 'Refresh'}</button></header>
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
@@ -166,7 +168,7 @@ function App() {
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}
-    </div><aside className="activity-region" aria-label="Recorded OpenCode activity"><h2>Recorded OpenCode activity</h2><p>Activity is not available in this build.</p></aside></div>
+    </div><RecordedActivity refresh={schedule} onObserved={setActivityObserved} /></div>
   </main>
 }
 

@@ -49,6 +49,9 @@ func fixture(_ name: String) throws -> Data {
         return account
     }
     runtime.snapshot = snapshot
+    runtime.activity = try Wire.decoder().decode(ActivityResponse.self, from: fixture("activity"))
+    runtime.activity?.activity.stale = true
+    runtime.activityRange = .last30days
     try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
     try Wire.encoder().encode(snapshot).write(to: URL(fileURLWithPath: output).appendingPathComponent("accounts.json"))
     func capture<V: View>(_ view: V, width: CGFloat, height: CGFloat, name: String, dark: Bool) throws {
@@ -64,6 +67,7 @@ func fixture(_ name: String) throws -> Data {
     for dark in [false, true] {
         let suffix = dark ? "dark" : "light"
         try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
+        try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 640, name: "native-activity-\(suffix)", dark: dark)
         for account in snapshot.accounts.prefix(4) {
             try capture(AccountCard(account: account), width: 336, height: 460, name: "native-\(account.provider)-\(suffix)", dark: dark)
         }
@@ -813,7 +817,7 @@ private final class SchedulingScenario: @unchecked Sendable {
         try lock.withLock { counts[key, default: 0] += 1; if let fault = failures[key] { throw fault } }
     }
     func owner(storage: URL? = nil) -> TallyOwner {
-        TallyOwner(clock: { self.now() }, storageURL: storage, inventory: { self.inventory() }, scanActivity: { try self.call("activity") }, collect: { key in
+        TallyOwner(clock: { self.now() }, storageURL: storage, inventory: { self.inventory() }, scanActivity: { _ in try self.call("activity"); return ActivityScan(databaseIdentity: "db", rows: []) }, collect: { key in
             try self.call(key)
             return GoObservation(windows: [QuotaWindow(id: "rolling", label: "5-hour", cadence: "rolling", durationSeconds: 18_000,
                                                        durationSource: "verified_mapping", usedPercent: 20, resetAt: self.now().addingTimeInterval(9_000))])

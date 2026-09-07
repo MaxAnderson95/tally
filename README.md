@@ -5,7 +5,7 @@
 
 A personal macOS AI subscription usage tracker for the menu bar, mobile web, and REST API. Tally discovers stored Anthropic, OpenAI, OpenCode Go, and xAI/Grok subscription Accounts and collects OpenCode Go quotas.
 
-The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Other provider collectors, complete scheduling, activity, redemption, and the full pin/card presentation remain later implementation layers.
+The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Recorded activity is available; reviewed API-equivalent pricing and redemption remain later implementation layers.
 
 An OpenCode companion plugin is planned for model-facing usage queries and reset redemption. Its tool description will encourage periodic usage checks.
 
@@ -26,7 +26,9 @@ The web app and `/api/v1/status`, `/api/v1/accounts`, `/api/v1/accounts/{id}`, a
 
 http://127.0.0.1:7483
 
-Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests no provider reads. The response explicitly marks activity scheduling unavailable in this slice. The unused Go groups have successful null observations after collection; command recovery storage is explicitly unavailable. Redemption routes do not exist.
+Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests activity only. Every valid explicit refresh schedules activity independently of provider cooldowns. The unused Go groups have successful null observations after collection; command recovery storage is explicitly unavailable. Redemption routes do not exist.
+
+`GET /api/v1/activity?range=today|yesterday|last30days` returns cached retained OpenCode activity; omitted range defaults to Today. Native and web have the same ranges, five recorded token components, recorded cost, provider/model breakdowns, and exactly 30 calendar trend buckets. Activity scans run independently every two minutes, on launch/wake, and on valid explicit refresh. History belongs to recorded providers in the selected local database, never current Accounts. Zen is excluded. Failed scans preserve stale last-good views in their original timezone; successful scans replace totals, including source deletions. Estimates remain explicitly unpriced until reviewed rates are bundled. See [recorded activity verification](docs/verification/recorded-activity.md).
 
 Settings saves a stable listener port, an optional allowed HTTPS web origin, and the OpenCode database path. Saving restarts the listener and switches inventory immediately. Pin/Unpin and the arrow buttons save Account selection and order; the web view reflects these preferences without exposing a settings mutation. Empty and all-unpinned inventories retain the plain menu bar glyph. Port collision does not select another port or stop native collection. Retry starts a fresh listener. Configure any personal Tailscale HTTPS proxy independently to forward to `127.0.0.1:7483`, preserve the configured origin's Host, and add that exact HTTPS origin in Tally settings. Tally does not configure Tailscale. No tailnet exposure is required for local use.
 
