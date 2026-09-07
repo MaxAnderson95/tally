@@ -75,16 +75,17 @@ public struct ActivitySource: Codable, Sendable {
         "Missing final usage is not zero. Title and compaction calls without provider/model attribution are not allocated. V1 remnants, events, and session totals are not added.",
         "OpenCode Go provider activity uses the recorded provider label; routing overrides and prepaid fallback mean it does not prove Go quota billing. Zen is excluded.",
         "Five recorded components are summed once. Upstream normalization may hide omitted components; finite negative historical values are preserved, not corrected or independently audited. Recorded cost uses OpenCode runtime pricing, not provider charges; recorded zeros have unknown pricing provenance.",
-        "API-equivalent pricing is unpriced until reviewed rates are bundled. Recorded cost never substitutes for an estimate."
+        "API-equivalent estimates use dated standard synchronous/global reference-token rates, not subscription charges, historical bills, quota consumption, savings or actual fees. Non-token fees are excluded. Recorded cost never substitutes for an estimate.",
+        "Anthropic writes use verified 5m/1h bounds; Go DeepSeek uses off-peak/peak bounds, without inferred duration or server pricing time. Partial bounds cover priced components only and do not bound all activity. Negative historical components invalidate pricing reconstruction; signed records remain visible and unpriced."
     ]
     @Null public var firstRetainedAt: Date?
     @Null public var lastRetainedAt: Date?
     public var populatedDays: Int
 }
 public struct ActivityPricing: Codable, Sendable {
-    public var revision = "unpriced-1"
-    public var observedOn = "2026-09-07"
-    public var digest = identityDigest("tally:unpriced-1:no-reviewed-rates")
+    public var revision = ActivityPrices.bundled?.revision ?? "bundle-unavailable"
+    public var observedOn = ActivityPrices.bundled?.observedOn ?? "unknown"
+    public var digest = ActivityPrices.digest
     public var basis = "standard_global_api_equivalent"
 }
 public struct ActivityModel: Codable, Sendable { public var modelId: String; public var totals: ActivityAggregate }
@@ -173,28 +174,13 @@ private func aggregate(_ rows: [ActivityRow]) -> ActivityAggregate {
     result.tokens = rows.isEmpty || result.missingUsageRows < rows.count ? Tokens() : nil
     var cost = Decimal.zero
     for row in rows {
-        if let tokens = row.tokens { result.tokens?.add(tokens); result.estimate.coverage.unpricedComponents.add(tokens) }
+        if let tokens = row.tokens { result.tokens?.add(tokens) }
         if let amount = row.cost {
             cost += amount; result.recordedCost.rowsWithCost += 1
             if amount == 0 { result.recordedCost.ambiguousZeroRows += 1 }
         } else { result.recordedCost.missingCostRows += 1 }
     }
     result.recordedCost.amount = rows.isEmpty || result.recordedCost.rowsWithCost > 0 ? NSDecimalNumber(decimal: cost).stringValue : nil
-    result.estimate.coverage.missingUsageRows = result.missingUsageRows
-    result.estimate.coverage.unpricedRows = rows.count - result.missingUsageRows
-    if !rows.isEmpty {
-        result.estimate.status = "unpriced"; result.estimate.lower = nil; result.estimate.upper = nil
-        for provider in providerOrder {
-            for model in Set(rows.filter { $0.provider == provider }.map(\.model)).sorted() {
-                let matching = rows.filter { $0.provider == provider && $0.model == model }
-                for missing in [false, true] {
-                    let subset = matching.filter { ($0.tokens == nil) == missing }
-                    guard !subset.isEmpty else { continue }
-                    var tokens = Tokens(); subset.compactMap(\.tokens).forEach { tokens.add($0) }
-                    result.estimate.exclusions.append(PricingExclusion(provider: provider, modelId: model, reason: missing ? "Usage missing" : "Reviewed rates not bundled", rows: subset.count, tokens: missing ? nil : tokens))
-                }
-            }
-        }
-    }
+    result.estimate = ActivityPrices.estimate(rows)
     return result
 }

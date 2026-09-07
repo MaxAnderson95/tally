@@ -24,7 +24,7 @@ private struct AuthorityResponder: HTTPResponder {
         InventoryRead(databaseIdentity: "test-db", credentials: providerOrder.map {
             StoredCredential(storedID: $0, name: $0, key: "private-\($0)", provider: $0)
         })
-    }, scanActivity: { cutoff in ActivityScan(databaseIdentity: "test-db", rows: [ActivityRow(created: cutoff.addingTimeInterval(-1), provider: "opencode-go", model: "grok", tokens: Tokens(input: 7, total: 7), cost: 0)]) }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
+    }, scanActivity: { cutoff in ActivityScan(databaseIdentity: "test-db", rows: [ActivityRow(created: cutoff.addingTimeInterval(-1), provider: "opencode-go", model: "grok-4.6", tokens: Tokens(input: 7, cacheWrite: 1, total: 8), cost: 0)]) }, collect: { _ in throw Fault("unexpected", "GET must not collect.") })
     try await owner.refresh(accountIDs: [])
     await owner.waitForCollection()
     let initial = await owner.snapshot()
@@ -54,7 +54,11 @@ private struct AuthorityResponder: HTTPResponder {
             let native = await owner.activityResponse()
             #expect(try Wire.encoder().encode(decoded.activity) == Wire.encoder().encode(native.activity))
             #expect(decoded.activity.data?.trend.days.count == 30)
-            #expect(decoded.activity.data?.totals.tokens?.total == 7)
+            #expect(decoded.activity.data?.totals.tokens?.total == 8)
+            #expect(decoded.activity.data?.totals.estimate.status == "partial")
+            #expect(decoded.activity.data?.totals.estimate.lower == "0.000014")
+            #expect(decoded.activity.data?.totals.estimate.coverage.unpricedComponents.cacheWrite == 1)
+            #expect(decoded.activity.data?.pricing.revision == "2026-09-07-r1")
         }
         try await client.execute(uri: "/api/v1/activity", method: .post, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]) { response in
             #expect(response.status == .methodNotAllowed)

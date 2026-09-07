@@ -258,6 +258,10 @@ public actor TallyOwner {
         value.nextAttemptAt = activity.nextAttemptAt; value.error = activity.error
         value.stale = value.stale || activity.stale
         value.age(at: clock())
+        if let data = value.data, data.pricing.revision != ActivityPricing().revision || data.pricing.digest != ActivityPricing().digest {
+            value.stale = true
+            value.error = value.error ?? Fault("activity_pricing_changed", "Reviewed pricing changed; cached estimates retain revision \(data.pricing.revision) until a successful scan.")
+        }
         if let data = value.data, data.timezone != timezone().identifier {
             value.stale = true
             value.error = value.error ?? Fault("activity_timezone_changed", "Mac timezone changed; cached buckets remain in \(data.timezone) until a successful scan.")
@@ -376,6 +380,7 @@ public actor TallyOwner {
             var fault: Fault?
             var views: [String: ActivityData]?
             do {
+                guard ActivityPrices.bundled != nil else { throw Fault("activity_pricing_unavailable", "Reviewed pricing resource failed verification; reinstall this Tally build. Cached estimates retain their original revision.") }
                 let result = try await scan(now)
                 guard result.databaseIdentity == namespace, let namespaceID else { throw Fault("activity_unavailable", "Activity source identity changed; refresh the inventory.") }
                 views = await Task.detached { result.derive(namespace: namespaceID, cutoff: now, timezone: zone) }.value

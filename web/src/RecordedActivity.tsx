@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import { groupIsStale } from './api'
-import { activityRanges, costLabel, decodeActivity, tokenLabel, type ActivityRange, type ActivityResponse, type Aggregate } from './activity'
+import { activityRanges, costLabel, decodeActivity, estimateLabel, estimateQualification, tokenLabel, type ActivityRange, type ActivityResponse, type Aggregate, type Tokens } from './activity'
+
+function Components({ value }: { value: Tokens }) {
+  return <>{Object.entries(value).map(([key, count]) => <div className="detail-window" key={key}><dt>{{ input: 'Noncached input', output: 'Visible output', reasoning: 'Reasoning', cacheRead: 'Cache read', cacheWrite: 'Cache write', total: 'Total' }[key]}</dt><dd>{count.toLocaleString()}</dd></div>)}</>
+}
 
 function Totals({ value }: { value: Aggregate }) {
   return <><p className="activity-total">{tokenLabel(value)}</p>
     {value.missingUsageRows > 0 && <p>Usage missing for {value.missingUsageRows} of {value.rows} records; token subtotal is incomplete.</p>}
     <p>{costLabel(value)}</p>
-    <p>API-equivalent estimate: {value.estimate.status === 'empty' ? 'No recorded activity' : 'Unpriced; reviewed rates not bundled'}</p>
+    <p>{estimateLabel(value.estimate)}</p><p>{estimateQualification(value.estimate)}</p>
+    {value.estimate.exclusions.length > 0 && <ul>{value.estimate.exclusions.map(item => <li key={`${item.provider}/${item.modelId}/${item.reason}`}>{item.provider}/{item.modelId}: {item.reason} ({item.rows} records; {item.tokens ? `${item.tokens.total.toLocaleString()} recorded tokens` : 'token quantity unknown'})</li>)}</ul>}
     <details><summary>Token and cost coverage</summary><dl>
       <dt>Retained records</dt><dd>{value.rows}</dd>
-      {value.tokens && Object.entries(value.tokens).map(([key, count]) => <div className="detail-window" key={key}><dt>{{ input: 'Noncached input', output: 'Visible output', reasoning: 'Reasoning', cacheRead: 'Cache read', cacheWrite: 'Cache write', total: 'Total' }[key]}</dt><dd>{count.toLocaleString()}</dd></div>)}
+      {value.tokens && <Components value={value.tokens} />}
       <dt>Rows with cost</dt><dd>{value.recordedCost.rowsWithCost}</dd><dt>Cost missing</dt><dd>{value.recordedCost.missingCostRows}</dd><dt>Ambiguous zero costs</dt><dd>{value.recordedCost.ambiguousZeroRows}</dd>
       <dt>Unpriced rows</dt><dd>{value.estimate.coverage.unpricedRows}</dd><dt>Usage missing</dt><dd>{value.missingUsageRows}</dd>
-    </dl></details></>
+      <dt>Fully priced rows</dt><dd>{value.estimate.coverage.fullyPricedRows}</dd><dt>Bounded rows</dt><dd>{value.estimate.coverage.boundedRows}</dd><dt>Partially priced rows</dt><dd>{value.estimate.coverage.partiallyPricedRows}</dd>
+    </dl><p>Exclusion counts can overlap; row coverage categories are disjoint.</p>
+      <details><summary>Priced components</summary><dl><Components value={value.estimate.coverage.pricedComponents} /></dl></details>
+      <details><summary>Unpriced known components</summary><dl><Components value={value.estimate.coverage.unpricedComponents} /></dl></details>
+    </details></>
 }
 
 export function RecordedActivity({ refresh, onObserved }: { refresh: unknown; onObserved: (date: string | null) => void }) {
@@ -55,15 +64,18 @@ export function RecordedActivity({ refresh, onObserved }: { refresh: unknown; on
     {!data ? <p>Activity unavailable</p> : <>
       <p>{activityRanges.find(item => item.value === data.range)?.label}{data.range !== range && ' (last view; requested range pending)'} · {data.timezone}</p>
       <p>Partial history · Provider/local-database attribution, not Accounts</p>
+      <p>Reference-token value · {data.pricing.revision} · observed {data.pricing.observedOn}</p>
+      <p>Standard/global comparison, not subscription charges, historical bills, quota debit or savings.</p>
       <Totals value={data.totals} />
       <p>30-calendar-day token context; selected days are solid.</p>
       <div className="activity-trend" role="img" aria-label="30-day recorded token trend">
-        {data.trend.days.map(day => <div key={day.date} className={day.selected ? 'selected' : ''} style={{ height: `${Math.max(2, (day.totals.tokens?.total ?? 0) / max * 100)}%` }} title={`${day.date}: ${tokenLabel(day.totals)}${day.totals.missingUsageRows ? '; usage missing' : ''}`} />)}
+        {data.trend.days.map(day => <div key={day.date} className={day.selected ? 'selected' : ''} style={{ height: `${Math.max(2, (day.totals.tokens?.total ?? 0) / max * 100)}%` }} title={`${day.date}: ${tokenLabel(day.totals)}; ${estimateLabel(day.totals.estimate)}${day.totals.missingUsageRows ? '; usage missing' : ''}`} />)}
       </div>
       <div className="window-heading"><span>{data.trend.days[0]?.date}</span><span>{data.trend.days.at(-1)?.date}</span></div>
-      <details><summary>Daily values</summary>{data.trend.days.map(day => <p key={day.date}>{day.date}{day.selected ? ' (selected)' : ''}: {tokenLabel(day.totals)}; {day.totals.missingUsageRows} usage missing</p>)}</details>
+      <details><summary>Daily values</summary>{data.trend.days.map(day => <details key={day.date}><summary>{day.date}{day.selected ? ' (selected)' : ''}: {estimateLabel(day.totals.estimate)}</summary><Totals value={day.totals} /></details>)}</details>
       {data.providers.map(provider => <details key={provider.provider}><summary>{provider.label}: {tokenLabel(provider.totals)}</summary><Totals value={provider.totals} />{provider.models.map(model => <details key={model.modelId}><summary>{model.modelId}</summary><Totals value={model.totals} /></details>)}</details>)}
       <details><summary>Source, pricing, and freshness</summary>
+        <p>Pricing SHA-256: {data.pricing.digest}</p>
         {data.source.qualifications.map(note => <p key={note}>{note}</p>)}
         <dl><dt>Range start</dt><dd>{exact(data.startAt)}</dd><dt>Exclusive end</dt><dd>{exact(data.endAt)}</dd><dt>First retained</dt><dd>{exact(data.source.firstRetainedAt)}</dd><dt>Last retained</dt><dd>{exact(data.source.lastRetainedAt)}</dd><dt>Populated retained days</dt><dd>{data.source.populatedDays} (not continuous coverage)</dd><dt>Last attempt</dt><dd>{exact(group?.lastAttemptAt ?? null)}</dd><dt>Next scan</dt><dd>{exact(group?.nextAttemptAt ?? null)}</dd><dt>Pricing revision</dt><dd>{data.pricing.revision} ({data.pricing.observedOn})</dd></dl>
       </details>

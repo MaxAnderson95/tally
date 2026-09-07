@@ -44,6 +44,161 @@ private func instant(_ value: String) -> Date { ISO8601DateFormatter().date(from
     #expect(zero.rows == 1 && zero.tokens?.total == 0 && zero.estimate.status == "unpriced" && zero.estimate.lower == nil)
 }
 
+private func pricedRow(_ provider: String, _ model: String, input: Double = 1_000, output: Double = 200,
+                       reasoning: Double = 300, read: Double = 10_000, write: Double = 0) -> ActivityRow {
+    ActivityRow(created: instant("2026-09-07T10:00:00Z"), provider: provider, model: model,
+                tokens: Tokens(input: input, output: output, reasoning: reasoning, cacheRead: read, cacheWrite: write,
+                               total: input + output + reasoning + read + write), cost: 999)
+}
+
+@Test func activityPricingResearchNumericFixturesAndAliases() throws {
+    #expect(ActivityPrices.bundled?.revision == "2026-09-07-r1")
+    #expect(ActivityPrices.digest == "1753c13f0c8e53de55320e6318319d7601010468610772197002f0dae2ad70c5")
+    for (provider, model, lower, upper) in [
+        ("anthropic", "claude-fable-5-1", "0.0375", "0.0375"),
+        ("openai", "gpt-6-astra", "0.045", "0.045"),
+        ("opencode-go", "glm-5.3", "0.0062", "0.0062"),
+        ("opencode-go", "glm-5.3-flash", "0.0007", "0.0007"),
+        ("xai", "grok-4.6", "0.01", "0.01"),
+        ("opencode-go", "deepseek-v4-flash", "0.00062", "0.00124")
+    ] {
+        let result = ActivityPrices.estimate([pricedRow(provider, model)])
+        #expect(result.lower == lower && result.upper == upper)
+        #expect(result.coverage.pricedComponents.total == 11_500)
+        #expect(result.coverage.unpricedComponents.total == 0)
+        #expect(result.status == (lower == upper ? "scalar" : "range"))
+    }
+    let writes = ActivityPrices.estimate([pricedRow("anthropic", "claude-fable-5-1", write: 1_000)])
+    #expect(writes.status == "range" && writes.lower == "0.05" && writes.upper == "0.0575")
+    #expect(writes.coverage.boundedRows == 1 && writes.exclusions.isEmpty)
+    let astra = ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", write: 1_000)])
+    #expect(astra.status == "scalar" && astra.lower == "0.0575" && astra.upper == "0.0575")
+    for (provider, alias, model) in [("openai", "gpt-5.6", "gpt-5.6-sol"), ("anthropic", "claude-haiku-4-5", "claude-haiku-4-5-20251001")] {
+        #expect(ActivityPrices.estimate([pricedRow(provider, alias)]).lower == ActivityPrices.estimate([pricedRow(provider, model)]).lower)
+    }
+    for (provider, model) in [("openai", "gpt-5.6-sol-fast"), ("opencode-go", "ox-alpha-free"), ("anthropic", "claude-opus-4-7-fast"), ("openai", "claude-fable-5-1"), ("openai", "gpt-6-astra-20260907")] {
+        let result = ActivityPrices.estimate([pricedRow(provider, model)])
+        #expect(result.status == "unpriced" && result.lower == nil && result.upper == nil)
+        #expect(result.coverage.unpricedRows == 1 && result.coverage.unpricedComponents.total == 11_500)
+    }
+}
+
+@Test func activityPricingEveryReviewedTierBoundaryIsPerRequest() throws {
+    let fixtures: [(String, String, Int, Bool, [Decimal], [Decimal])] = [
+        ("openai", "gpt-6-astra", 272000, false, [10, 50, 1, 12.5], [20, 75, 2, 25]),
+        ("openai", "gpt-5.6-sol", 272000, false, [4, 20, 0.4, 5], [8, 30, 0.8, 10]),
+        ("openai", "gpt-5.6-luna", 272000, false, [0.2, 1.2, 0.02, 0.25], [0.4, 1.8, 0.04, 0.5]),
+        ("opencode-go", "gpt-5.6-luna", 272000, false, [0.2, 1.2, 0.02, 0.25], [0.4, 1.8, 0.04, 0.5]),
+        ("opencode-go", "grok-4.6", 200000, false, [2, 6, 0.5], [4, 12, 1]),
+        ("xai", "grok-4.6", 200000, true, [2, 6, 0.5], [4, 12, 1]),
+        ("xai", "grok-4.5", 200000, true, [2, 6, 0.3], [4, 12, 0.6])
+    ]
+    for (provider, model, threshold, inclusive, short, long) in fixtures {
+        for delta in [-1.0, 0, 1] {
+            let input = Double(threshold) - 11_000 + delta
+            let result = ActivityPrices.estimate([pricedRow(provider, model, input: input, write: 1_000)])
+            let rates = delta > 0 || (delta == 0 && inclusive) ? long : short
+            // Independent fixture arithmetic includes cached prompt tokens and excludes output from the threshold.
+            var expected = Decimal(Int(input)) * rates[0] + 500 * rates[1] + 10_000 * rates[2]
+            if rates.count == 4 { expected += 1_000 * rates[3] }
+            #expect(Decimal(string: try #require(result.lower)) == expected / 1_000_000)
+            #expect(result.status == (rates.count == 3 ? "partial" : "scalar"))
+        }
+    }
+    let direct = ActivityPrices.estimate([pricedRow("xai", "grok-4.6", input: 190_000)])
+    let go = ActivityPrices.estimate([pricedRow("opencode-go", "grok-4.6", input: 190_000)])
+    #expect(direct.lower == "0.776" && go.lower == "0.388")
+    let equality = ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", input: 262_000)])
+    #expect(equality.lower == "2.655")
+    let above = ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", input: 262_001)])
+    #expect(above.lower == "5.29752")
+    let twoSmall = ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", input: 150_000), pricedRow("openai", "gpt-6-astra", input: 150_000)])
+    #expect(twoSmall.lower == "3.07")
+    let largeOutput = ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", output: 300_000)])
+    #expect(largeOutput.lower == "15.035")
+}
+
+@Test func activityPricingPartialMissingSignedAndEmptyCoverage() throws {
+    let partial = pricedRow("xai", "grok-4.6", write: 1_000)
+    let bounded = pricedRow("anthropic", "claude-fable-5-1", write: 1_000)
+    let scalar = pricedRow("openai", "gpt-6-astra")
+    let unknown = pricedRow("openai", "gpt-5.6-sol-fast")
+    var missing = scalar; missing.tokens = nil
+    let rows = [partial, bounded, scalar, unknown, missing]
+    let estimate = ActivityPrices.estimate(rows), coverage = estimate.coverage
+    #expect(estimate.status == "partial" && estimate.lower == "0.105" && estimate.upper == "0.1125")
+    #expect(coverage.fullyPricedRows == 1 && coverage.boundedRows == 1 && coverage.partiallyPricedRows == 1)
+    #expect(coverage.unpricedRows == 1 && coverage.missingUsageRows == 1)
+    #expect(coverage.pricedComponents.total == 35_500 && coverage.unpricedComponents.total == 12_500)
+    #expect(estimate.exclusions.first(where: { $0.reason == "Usage missing" })?.tokens == nil)
+    for key in [\Tokens.input, \.output, \.reasoning, \.cacheRead, \.cacheWrite, \.total] {
+        #expect(coverage.pricedComponents[keyPath: key] + coverage.unpricedComponents[keyPath: key] == rows.compactMap(\.tokens).reduce(0) { $0 + $1[keyPath: key] })
+    }
+    let writeOnly = ActivityPrices.estimate([pricedRow("xai", "grok-4.6", input: 0, output: 0, reasoning: 0, read: 0, write: 10)])
+    #expect(writeOnly.status == "unpriced" && writeOnly.lower == nil)
+    for key in [\Tokens.input, \.output, \.reasoning, \.cacheRead, \.cacheWrite] {
+        var signed = scalar; signed.tokens![keyPath: key] = -183; signed.tokens!.add(Tokens())
+        let invalid = ActivityPrices.estimate([signed])
+        #expect(invalid.status == "unpriced" && invalid.lower == nil && invalid.coverage.pricedComponents.total == 0)
+        #expect(invalid.coverage.unpricedComponents[keyPath: key] == -183)
+        #expect(invalid.exclusions.first?.reason.contains("Invalid token reconstruction") == true)
+    }
+    let zero = pricedRow("openai", "gpt-6-astra", input: 0, output: 0, reasoning: 0, read: 0)
+    #expect(ActivityPrices.estimate([zero]).status == "scalar" && ActivityPrices.estimate([zero]).lower == "0")
+    var unknownZero = zero; unknownZero.model = "unknown"
+    #expect(ActivityPrices.estimate([unknownZero]).status == "unpriced")
+    #expect(ActivityPrices.estimate([]).status == "empty" && ActivityPrices.estimate([]).lower == "0")
+    #expect(ActivityPrices.estimate([missing]).status == "unpriced")
+    #expect(ActivityPrices.estimate([zero, unknownZero]).status == "partial")
+    var later = pricedRow("opencode-go", "deepseek-v4-flash"); later.created += 100_000
+    #expect(ActivityPrices.estimate([later]).upper == "0.00124")
+}
+
+@Test func activityPricingRevisionCacheRetainsOldUntilSuccessfulScan() async throws {
+    let scenario = ActivityScenario()
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("cache.json")
+    let first = scenario.owner(storage: storage)
+    try await first.refresh(accountIDs: []); await first.waitForCollection()
+    var store = AccountIdentityStore(url: storage)
+    for key in ActivityRange.allCases.map(\.rawValue) {
+        store.state.namespaces["db"]?.activity?[key]?.data?.pricing.revision = "old-reviewed-revision"
+        store.state.namespaces["db"]?.activity?[key]?.data?.pricing.digest = "old-digest"
+        store.state.namespaces["db"]?.activity?[key]?.data?.totals.estimate.lower = "123"
+    }
+    try store.save()
+    scenario.change(failed: true)
+    let restored = scenario.owner(storage: storage)
+    try await restored.refresh(accountIDs: []); await restored.waitForCollection()
+    for range in ActivityRange.allCases {
+        let old = await restored.activityResponse(range: range).activity
+        #expect(old.stale && old.data?.pricing.revision == "old-reviewed-revision")
+        #expect(old.data?.pricing.digest == "old-digest" && old.data?.totals.estimate.lower == "123")
+    }
+    scenario.change()
+    try await restored.refresh(accountIDs: []); await restored.waitForCollection()
+    for range in ActivityRange.allCases {
+        let current = await restored.activityResponse(range: range).activity
+        #expect(!current.stale && current.data?.pricing.revision == "2026-09-07-r1")
+        #expect(current.data?.pricing.digest == ActivityPrices.digest && current.data?.totals.estimate.lower != "123")
+    }
+}
+
+@Test func activityPricingWirePartialAndRangeFixtures() throws {
+    let rows = [pricedRow("anthropic", "claude-fable-5-1", write: 1_000), pricedRow("xai", "grok-4.6", write: 1_000)]
+    let data = ActivityScan(databaseIdentity: "fixture", rows: rows).derive(namespace: "fixture", cutoff: instant("2026-09-07T12:00:00Z"), timezone: .gmt)["today"]!
+    if let output = ProcessInfo.processInfo.environment["TALLY_PRICING_FIXTURE_OUTPUT"] {
+        try Wire.encoder().encode(data).write(to: URL(fileURLWithPath: output)); return
+    }
+    let decoded = try Wire.decoder().decode(ActivityData.self, from: fixture("activity-pricing"))
+    #expect(decoded.totals.estimate.status == "partial" && decoded.totals.estimate.lower == "0.06" && decoded.totals.estimate.upper == "0.0675")
+    #expect(decoded.providers.first?.totals.estimate.status == "range")
+    #expect(decoded.providers.first?.models.first?.totals.estimate.upper == "0.0575")
+    #expect(decoded.trend.days.last?.totals.estimate.upper == "0.0675")
+    #expect(try Wire.encoder().encode(decoded) == Wire.encoder().encode(data))
+}
+
 private struct ActivityDatabase {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     var path: String { directory.appendingPathComponent("opencode.db").path }

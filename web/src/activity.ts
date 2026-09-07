@@ -36,4 +36,18 @@ export function decodeActivity(text: string): ActivityResponse {
 }
 export const tokenLabel = (value: Aggregate) => value.rows === 0 ? 'No recorded activity' : value.tokens === null ? 'Usage missing' : `${value.tokens.total.toLocaleString()} recorded tokens`
 export const costLabel = (value: Aggregate) => value.rows === 0 ? 'Recorded cost: no recorded activity' : value.recordedCost.amount === null ? 'Recorded cost unavailable' : value.recordedCost.amount === '0' ? 'Recorded $0; pricing provenance unknown' : `Recorded $${value.recordedCost.amount} USD`
+export function estimateLabel(value: Estimate): string {
+  if (value.status === 'empty') return 'API-equivalent estimate: No recorded activity'
+  if (value.lower === null || value.upper === null) return 'API-equivalent estimate: Unpriced'
+  const amount = value.lower === value.upper ? `$${value.lower}` : `$${value.lower} to $${value.upper}`
+  return `API-equivalent ${value.status === 'partial' ? 'partial subtotal' : 'estimate'}: ${amount} USD`
+}
+export function estimateQualification(value: Estimate): string {
+  switch (value.status) {
+    case 'partial': return 'Incomplete: bounds cover priced components only; the upper value does not bound all activity.'
+    case 'range': return 'Bounded reference: Anthropic writes use 5m/1h alternatives; Go DeepSeek uses off-peak/peak alternatives.'
+    case 'unpriced': return 'No verified amount for these records; recorded cost is separate.'
+    default: return 'Dated standard/global reference-token value, not a bill, subscription charge, quota debit or savings.'
+  }
+}
 export const activityRanges = [{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'last30days', label: 'Last 30 days' }] satisfies { value: ActivityRange; label: string }[]

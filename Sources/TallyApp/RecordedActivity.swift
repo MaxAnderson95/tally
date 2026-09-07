@@ -23,6 +23,8 @@ struct RecordedActivity: View {
                 if let data = group.data {
                     Text("\(data.range.label) · \(data.timezone)")
                     Text("Partial history · Provider/local-database attribution, not Accounts")
+                    Text("Reference-token value · \(data.pricing.revision) · observed \(data.pricing.observedOn)")
+                    Text("Standard/global comparison, not subscription charges, historical bills, quota debit or savings.")
                     ActivityTotals(value: data.totals)
                     Text("30-calendar-day token context; selected days are solid.")
                     let maximum = max(1, data.trend.days.compactMap { $0.totals.tokens?.total }.max() ?? 0)
@@ -30,13 +32,13 @@ struct RecordedActivity: View {
                         ForEach(data.trend.days, id: \.date) { day in
                             Rectangle().fill(Color.primary.opacity(day.selected ? 1 : 0.15))
                                 .frame(height: max(2, (day.totals.tokens?.total ?? 0) / maximum * 80))
-                                .help("\(day.date): \(day.totals.tokenLabel); \(day.totals.missingUsageRows) usage missing")
+                                .help("\(day.date): \(day.totals.tokenLabel); \(day.totals.estimate.label); \(day.totals.missingUsageRows) usage missing")
                         }
                     }.frame(height: 80).accessibilityLabel("30-day recorded token trend")
                     HStack { Text(data.trend.days.first?.date ?? ""); Spacer(); Text(data.trend.days.last?.date ?? "") }
                     DisclosureGroup("Daily values") {
                         ForEach(data.trend.days, id: \.date) { day in
-                            Text("\(day.date)\(day.selected ? " (selected)" : ""): \(day.totals.tokenLabel); \(day.totals.missingUsageRows) usage missing")
+                            DisclosureGroup(day.date + (day.selected ? " (selected)" : "")) { ActivityTotals(value: day.totals) }
                         }
                     }
                     ForEach(data.providers, id: \.provider) { provider in
@@ -58,6 +60,7 @@ struct RecordedActivity: View {
                             LabeledContent("Last attempt", value: exact(group.lastAttemptAt, data.timezone))
                             LabeledContent("Next scan", value: exact(group.nextAttemptAt, data.timezone))
                             LabeledContent("Pricing revision", value: "\(data.pricing.revision) (\(data.pricing.observedOn))")
+                            LabeledContent("Pricing SHA-256", value: data.pricing.digest)
                         }
                     }
                 } else { Text("Activity unavailable") }
@@ -79,7 +82,14 @@ private struct ActivityTotals: View {
             Text(value.tokenLabel).font(.headline)
             if value.missingUsageRows > 0 { Text("Usage missing for \(value.missingUsageRows) of \(value.rows) records; subtotal is incomplete.") }
             Text(value.costLabel)
-            Text(value.rows == 0 ? "API-equivalent estimate: No recorded activity" : "API-equivalent estimate: Unpriced; reviewed rates not bundled")
+            Text(value.estimate.label)
+            Text(value.estimate.qualification)
+            if !value.estimate.exclusions.isEmpty {
+                ForEach(value.estimate.exclusions.indices, id: \.self) { index in
+                    let exclusion = value.estimate.exclusions[index]
+                    Text("\(exclusion.provider)/\(exclusion.modelId): \(exclusion.reason) (\(exclusion.rows) records; \(exclusion.tokens.map { $0.total.formatted() + " recorded tokens" } ?? "token quantity unknown"))")
+                }
+            }
             DisclosureGroup("Token and cost coverage") {
                 VStack(alignment: .leading, spacing: 6) {
                     LabeledContent("Retained records", value: "\(value.rows)")
@@ -94,8 +104,30 @@ private struct ActivityTotals: View {
                     LabeledContent("Cost missing", value: "\(value.recordedCost.missingCostRows)")
                     LabeledContent("Ambiguous zero costs", value: "\(value.recordedCost.ambiguousZeroRows)")
                     LabeledContent("Unpriced rows", value: "\(value.estimate.coverage.unpricedRows)")
+                    LabeledContent("Fully priced rows", value: "\(value.estimate.coverage.fullyPricedRows)")
+                    LabeledContent("Bounded rows", value: "\(value.estimate.coverage.boundedRows)")
+                    LabeledContent("Partially priced rows", value: "\(value.estimate.coverage.partiallyPricedRows)")
+                    LabeledContent("Missing usage rows", value: "\(value.estimate.coverage.missingUsageRows)")
+                    Text("Exclusion counts can overlap; row coverage categories are disjoint.")
+                    ComponentCoverage(label: "Priced components", tokens: value.estimate.coverage.pricedComponents)
+                    ComponentCoverage(label: "Unpriced known components", tokens: value.estimate.coverage.unpricedComponents)
                 }
             }
+        }
+    }
+}
+
+private struct ComponentCoverage: View {
+    let label: String
+    let tokens: Tokens
+    var body: some View {
+        DisclosureGroup(label) {
+            LabeledContent("Noncached input", value: tokens.input.formatted())
+            LabeledContent("Visible output", value: tokens.output.formatted())
+            LabeledContent("Reasoning", value: tokens.reasoning.formatted())
+            LabeledContent("Cache read", value: tokens.cacheRead.formatted())
+            LabeledContent("Cache write", value: tokens.cacheWrite.formatted())
+            LabeledContent("Total", value: tokens.total.formatted())
         }
     }
 }
