@@ -73,11 +73,8 @@ public actor TallyOwner {
                     quotas.windows[index].derive(at: now, groupStale: account.groups.quotas.stale)
                 }
                 account.groups.quotas.data = quotas
-                account.pin.lines = quotas.windows.filter { $0.durationSeconds != nil && $0.scope == "account" }.prefix(2).map {
-                    PinLine(windowId: $0.id, label: $0.label, remainingPercent: $0.remainingPercent, stale: $0.stale)
-                }
-                account.pin.warning = account.pin.lines.contains { $0.stale }
             }
+            account.derivePresentation()
             return account
         }
         return AccountsResponse(status: Status(appBuild: appBuild, serverTime: now, timezone: TimeZone.current.identifier,

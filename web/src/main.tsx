@@ -1,33 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
 import './style.css'
+import { ProviderLogo, providerName, providers } from './ProviderLogo'
 
 function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
   const quota = account.groups.quotas
   const windows = overviewWindows(account)
   const extra = account.groups.extraUsage
   const extraLabel = account.provider === 'xai' ? 'PAYG' : 'Extra usage'
+  const [details, setDetails] = useState(false)
   const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
+  const observed = (date: string | null) => date ? `${exact(date)} (${Math.max(0, Math.floor((Date.now() - Date.parse(date)) / 60_000))}m ago)` : 'Never'
   return <article className="account">
     <header className="account-heading">
-      {account.provider === 'opencode-go' ? <svg className="logo" viewBox="0 0 24 24" aria-label="OpenCode Go" role="img"><path fill="currentColor" fillRule="evenodd" d="M3 3h18v18H3V3zm4 4v10h10V7H7zm6 2h2v6h-2V9z" /></svg> : <span>{account.provider}</span>}
+      <ProviderLogo provider={account.provider} color={account.identityColorIndex} />
       <div><h2>{account.name}</h2><p>{account.groups.plan.data?.name ?? 'Plan unknown'}</p></div>
       {stale && <svg width="16" height="16" viewBox="0 0 20 20" role="img" aria-label="Stale reading"><title>Last-good values may be out of date</title><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>}
+      {account.command.state && <button className="details-toggle" onClick={() => setDetails(true)} aria-label="Show reset operation warning"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg></button>}
+      <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}>{details ? '⌃' : '⌄'}</button>
     </header>
-    {windows.length === 0 && <div className="unavailable"><strong>?</strong><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
+    {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
     {windows.map((window, index) => <section className="quota" key={window.id}>
       <div className={index === 0 && window.durationSeconds !== null ? 'hero' : 'window-heading'}>
-        {index === 0 && window.durationSeconds !== null ? <><strong>{percentage(window.remainingPercent)}</strong><span>{window.label} remaining</span></> : <><span>{window.label}</span><strong>{percentage(window.remainingPercent)}</strong></>}
+        {index === 0 && window.durationSeconds !== null ? <><strong>{percentage(window.remainingPercent)}</strong><span>{window.label} remaining</span><span className="hero-timing">{resetLabel(window)}</span></> : <><span>{window.label}</span><strong>{percentage(window.remainingPercent)}</strong></>}
       </div>
       <div className={`bar ${window.durationSeconds === null || window.remainingPercent === null ? 'uncertain' : ''}`} aria-label={`${percentage(window.remainingPercent)} remaining`}>
         {window.remainingPercent !== null && <div style={{ width: `${window.remainingPercent}%` }} />}
       </div>
-      <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>
+      {!(index === 0 && window.durationSeconds !== null) && <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>}
     </section>)}
-    {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={extraLabel}>
-      <div className="window-heading"><span>{extraLabel}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
+    {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={account.provider === 'xai' ? 'PAYG' : 'Extra usage'}>
+      <div className="window-heading"><span>{account.provider === 'xai' ? 'PAYG' : 'Extra usage'}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
       {extra.data?.presentation === 'bounded' && <>
         <div className="bar" aria-label={`${percentage(extra.data.remainingPercent)} remaining`}><div style={{ width: `${extra.data.remainingPercent}%` }} /></div>
         <p className="timing">{moneyLabel(extra.data.used)} used of {moneyLabel(extra.data.limit)}</p>
@@ -70,31 +75,30 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
         </section>)}
       </details>
     </>}
-    <details><summary>Details</summary><dl>
-      <dt>Observed</dt><dd>{exact(quota.observedAt)}</dd>
-      <dt>Last attempt</dt><dd>{exact(quota.lastAttemptAt)}</dd>
-      <dt>Collection</dt><dd>{quota.refreshing ? 'Refreshing' : stale ? 'Stale' : 'Current'}</dd>
-      <dt>Next attempt</dt><dd>{quota.nextAttemptAt ? exact(quota.nextAttemptAt) : 'Not scheduled'}</dd>
-      <dt>Timezone</dt><dd>{timezone}</dd>
-      {quota.error && <><dt>Error</dt><dd>{quota.error.message}</dd></>}
-      {(account.provider === 'anthropic' || account.provider === 'xai') && <>
-        <dt>Plan observed</dt><dd>{exact(account.groups.plan.observedAt)}</dd>
-        <dt>Plan collection</dt><dd>{account.groups.plan.refreshing ? 'Refreshing' : groupIsStale(account.groups.plan) ? 'Stale' : 'Current'}</dd>
-        {account.groups.plan.error && <><dt>Plan error</dt><dd>{account.groups.plan.error.message}</dd></>}
-        <dt>{extraLabel} observed</dt><dd>{exact(extra.observedAt)}</dd>
-        <dt>{extraLabel} attempt</dt><dd>{exact(extra.lastAttemptAt)}</dd>
-        <dt>{extraLabel} next</dt><dd>{exact(extra.nextAttemptAt)}</dd>
-        <dt>{extraLabel} collection</dt><dd>{extra.refreshing ? 'Refreshing' : disconnected || groupIsStale(extra) ? 'Stale' : 'Current'}</dd>
-        {extra.error && <><dt>{extraLabel} error</dt><dd>{extra.error.message}</dd></>}
-        <dt>{extraLabel} source</dt><dd>{extra.data?.used ? `${extra.data.used.source.amount} ${extra.data.used.source.unit}; exponent ${extra.data.used.source.exponent ?? 'unknown'}` : 'Unavailable'}</dd>
-      </>}
+    {details && <section className="details" aria-label={`Details for ${account.name}`}><dl>
+      {account.command.state && <><dt>Reset operation</dt><dd>{account.command.state === 'unknown' ? 'Outcome unknown; acknowledgement required in Tally reset controls.' : 'Redeeming…'} {account.command.blockingOperationId}</dd></>}
+      <dt>Mac timezone</dt><dd>{timezone}</dd>
+      {(['plan', 'quotas', 'extraUsage', 'balances', 'resetSummary', 'resetDetails'] as const).map(key => {
+        const group = account.groups[key]
+        const label = { plan: 'Plan', quotas: 'Quotas', extraUsage: extraLabel, balances: 'Purchased credits', resetSummary: 'Reset count', resetDetails: 'Reset details' }[key]
+        return <div className="detail-window" key={key}>
+          <dt>{label} observed</dt><dd>{observed(group.observedAt)}</dd>
+          <dt>{label} attempt</dt><dd>{exact(group.lastAttemptAt)}</dd>
+          <dt>{label} collection</dt><dd>{group.refreshing ? 'Refreshing' : disconnected || groupIsStale(group) ? 'Stale' : group.data === null ? 'Not applicable / absent' : 'Current'}</dd>
+          <dt>{label} next</dt><dd>{group.nextAttemptAt ? exact(group.nextAttemptAt) : 'Not scheduled'}</dd>
+          {group.error && <><dt>{label} error</dt><dd>{group.error.message}</dd></>}
+        </div>
+      })}
+      {account.provider === 'openai' && <><dt>Available resets</dt><dd>{account.groups.resetSummary.data?.availableCount ?? 'Unavailable'}</dd><dt>Provider-applicable</dt><dd>{account.groups.resetSummary.data?.applicableAvailableCount ?? 'Not reported'}</dd></>}
+      {extra.data?.used && <><dt>{extraLabel} source</dt><dd>{`${extra.data.used.source.amount} ${extra.data.used.source.unit}; exponent ${extra.data.used.source.exponent ?? 'unknown'}`}</dd></>}
       {windows.map(window => <div className="detail-window" key={window.id}>
         <dt>{window.label} scope</dt><dd>{window.scopeNote ?? window.scope}</dd>
-        <dt>{window.label} used</dt><dd>{percentage(window.usedPercent)}</dd>
+        <dt>{window.label} used</dt><dd>{window.usedPercent === null ? '?' : `${window.usedPercent}%`}</dd>
         <dt>Exact reset</dt><dd>{exact(window.resetAt)}</dd>
         <dt>Pacing</dt><dd>{window.pacing ? `${Math.round(window.pacing.projectedUsedPercent)}% projected at reset` : window.pacingUnavailableReason}</dd>
+        {window.pacing && <><dt>Spare allowance</dt><dd>{window.pacing.sparePercent.toFixed(1)}%</dd><dt>Average-rate run-out</dt><dd>{window.pacing.runOutAt ? exact(window.pacing.runOutAt) : window.pacing.runOutReason}</dd></>}
       </div>)}
-    </dl></details>
+    </dl></section>}
   </article>
 }
 
@@ -104,20 +108,20 @@ function App() {
   const [refreshing, setRefreshing] = useState(false)
   const [schedule, setSchedule] = useState<RefreshResponse>()
   const [now, setNow] = useState(Date.now())
+  const build = useRef<string>(undefined)
   useEffect(() => {
     let stopped = false
     let inFlight = false
-    let build: string | undefined
     const controller = new AbortController()
     async function poll() {
       if (document.hidden || inFlight) return
       inFlight = true
       try {
-        const response = await fetch('/api/v1/accounts', { signal: controller.signal })
+        const response = await fetch('/api/v1/accounts', { cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) })
         if (!response.ok) throw new Error(`Tally connection failed (HTTP ${response.status}).`)
         const next = decodeAccounts(await response.text())
-        if (build && build !== next.status.appBuild) { location.reload(); return }
-        build = next.status.appBuild
+        if (build.current && build.current !== next.status.appBuild) { location.reload(); return }
+        build.current = next.status.appBuild
         if (!stopped) { setData(next); setError(undefined) }
       } catch (failure) { if (!stopped) setError(failure instanceof Error ? failure.message : 'Tally connection failed.') }
       finally { inFlight = false }
@@ -135,14 +139,17 @@ function App() {
       if (!response.ok) throw new Error('Refresh could not be scheduled. Check Tally on your Mac.')
       const result: RefreshResponse = await response.json()
       setSchedule(result)
-      const current = await fetch('/api/v1/accounts')
+      const current = await fetch('/api/v1/accounts', { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
       if (!current.ok) throw new Error('Refresh was scheduled, but updated state could not be read.')
-      setData(decodeAccounts(await current.text()))
+      const next = decodeAccounts(await current.text())
+      if (build.current && build.current !== next.status.appBuild) { location.reload(); return }
+      build.current = next.status.appBuild
+      setData(next)
       setError(undefined)
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
-  const latest = data?.accounts.map(account => account.groups.quotas.observedAt).filter(date => date !== null).sort().at(-1)
+  const latest = data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)).filter(date => date !== null).sort().at(-1)
   return <main>
     <header className="page-heading"><div><h1>Tally</h1><p>{latest ? `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p></div><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Scheduling…' : 'Refresh'}</button></header>
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
@@ -152,12 +159,14 @@ function App() {
       <p>Activity: {scheduleLabel(schedule.activity)}</p>
     </div>}
     {data?.status.inventory.error && <p className="notice" role="alert">{data.status.inventory.error.message}</p>}
+    <div className="dashboard"><div className="account-region">
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
       <h2>{pinned ? 'Pinned' : 'Other accounts'}</h2>
-      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div>
+      {pinned ? <div className="accounts">{data.accounts.filter(account => account.pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div> : providers.map(provider => data.accounts.some(account => !account.pinned && account.provider === provider) && <section key={provider}><h3 className="provider-heading">{providerName(provider)}</h3><div className="accounts">{data.accounts.filter(account => !account.pinned && account.provider === provider).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div></section>)}
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}
+    </div><aside className="activity-region" aria-label="Recorded OpenCode activity"><h2>Recorded OpenCode activity</h2><p>Activity is not available in this build.</p></aside></div>
   </main>
 }
 

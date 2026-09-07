@@ -33,7 +33,7 @@ export type Credit = {
   title: string | null; description: string | null; grantedAt: string | null
   expiry: { kind: 'at'; at: string } | { kind: 'none' | 'unknown'; at: null }
 }
-export const balanceLabel = (balance: Balance) => balance.unlimited === true ? `Unlimited ${balance.unit}` : `${balance.quantity ?? 'Unknown'} ${balance.unit}${balance.referenceValue ? ` (${moneyLabel(balance.referenceValue)}, reference-derived)` : ''}`
+export const balanceLabel = (balance: Balance) => balance.unlimited === true ? `Unlimited ${balance.unit}` : `${balance.quantity ?? 'Unknown'} ${balance.unit}${balance.referenceValue ? ` (${moneyLabel(balance.referenceValue)})` : ''}`
 export const resetCountLabel = (summary: ResetSummary | null) => summary?.availableCount == null ? 'Reset count unavailable' : `${summary.availableCount} reset credits`
 export const creditExpiryLabel = (credit: Credit, timezone: string) => credit.expiry.kind === 'at' ? new Date(credit.expiry.at).toLocaleString(undefined, { timeZone: timezone }) : credit.expiry.kind === 'none' ? 'Does not expire' : 'Expiry unknown'
 export type ExtraUsage = {
@@ -42,7 +42,7 @@ export type ExtraUsage = {
   presentation: 'off' | 'used_only' | 'bounded' | 'unavailable'
 }
 export const moneyLabel = (money: Money | null) => money ? `${money.currency} ${money.amount}` : 'Unavailable'
-export const overviewWindows = (account: Account) => account.groups.quotas.data?.windows.filter(window => window.displayInOverview) ?? []
+export const overviewWindows = (account: Account) => (account.groups.quotas.data?.windows.filter(window => window.displayInOverview) ?? []).sort((a, b) => (a.durationSeconds ?? Infinity) - (b.durationSeconds ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 export type Status = {
   apiMajor: 1; appBuild: string; serverTime: string; timezone: string; owner: 'ready' | 'shutting_down'
   inventory: Group<{ count: number; namespaceId: string }>

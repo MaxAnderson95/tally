@@ -18,7 +18,7 @@ test('OpenAI shared normalized credits preserve provenance, zero, null, and expi
   account.groups.quotas.data = reading.quotas
   assert.deepEqual(overviewWindows(account).map(window => window.label), ['Weekly'])
   assert.deepEqual(reading.quotas.windows.map(window => window.durationSeconds), [7200,604800,null])
-  assert.equal(balanceLabel(reading.balances.items[0]), '12.5 credits (USD 0.5, reference-derived)')
+  assert.equal(balanceLabel(reading.balances.items[0]), '12.5 credits (USD 0.5)')
   assert.equal(reading.balances.items[0].money, null)
   assert.equal(reading.balances.items[0].referenceValue?.provenance, 'reference_conversion')
   assert.equal(resetCountLabel(reading.details.summary), '2 reset credits')
@@ -64,6 +64,8 @@ test('Anthropic cards consume exact owner money and overview scope flags', () =>
   account.groups.quotas.data = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/anthropic-quotas.json', import.meta.url), 'utf8'))
   assert.deepEqual(overviewWindows(account).map(window => window.id), ['session', 'weekly_all', 'weekly_scoped:fable', 'daily'])
   assert.equal(account.groups.quotas.data!.windows.length, 5)
+  account.groups.quotas.data!.windows.reverse()
+  assert.deepEqual(overviewWindows(account).map(window => window.id), ['session', 'weekly_all', 'weekly_scoped:fable', 'daily'])
   assert.match(overviewWindows(account)[2].scopeNote!, /up to half/)
   assert.equal(overviewWindows(account)[2].usedPercent, 40)
   assert.equal(overviewWindows(account)[2].modelId, null)

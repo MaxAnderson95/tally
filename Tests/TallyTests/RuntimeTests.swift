@@ -1,10 +1,125 @@
 import Foundation
 import Testing
 import CSQLite
+import AppKit
+import SwiftUI
 @testable import TallyCore
+@testable import TallyApp
 
 func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!)
+}
+
+@Test @MainActor func nativePresentationReference() throws {
+    // Opt-in image evidence uses the real native views without starting the runtime or collection.
+    guard let output = ProcessInfo.processInfo.environment["TALLY_PRESENTATION_OUTPUT"] else { return }
+    _ = NSApplication.shared
+    let runtime = Runtime()
+    var snapshot = try Wire.decoder().decode(AccountsResponse.self, from: fixture("accounts"))
+    let base = snapshot.accounts[0]
+    let now = Date()
+    snapshot.accounts = try (0..<14).map { index in
+        var account = base
+        account.id = "native-\(index)"; account.name = index == 0 ? "Personal with a deliberately long Account name" : "Account \(index + 1)"
+        account.provider = ["anthropic", "openai", "opencode-go", "xai"][index % 4]
+        account.identityColorIndex = index % 6; account.pinOrder = index
+        account.groups = AccountGroups()
+        let observations: [GroupObservation]
+        switch account.provider {
+        case "anthropic": observations = try AnthropicUsage.decode(fixture("anthropic-usage"))
+        case "openai": observations = try OpenAIUsage.decodeUsage(fixture("openai-usage"), at: now)
+        case "xai": observations = try GrokUsage.decode(fixture("grok-billing"))
+        default:
+            let go = try GoUsage.decode(fixture("go-valid"))
+            observations = [.plan(Plan(name: "Go")), .quotas(Quotas(windows: go.windows))]
+        }
+        for observation in observations { observation.apply(to: &account.groups, at: now.addingTimeInterval(-90)) }
+        if account.provider == "openai" {
+            GroupObservation.resetDetails(try OpenAIUsage.decodeCredits(fixture("openai-credits"))).apply(to: &account.groups, at: now.addingTimeInterval(-90))
+            account.groups.selectResetSummary()
+        }
+        if var quotas = account.groups.quotas.data {
+            for i in quotas.windows.indices {
+                quotas.windows[i].resetAt = now.addingTimeInterval(i == 0 ? 7200 : 259200)
+                quotas.windows[i].derive(at: now, groupStale: index == 2)
+            }
+            account.groups.quotas.data = quotas
+        }
+        account.derivePresentation()
+        return account
+    }
+    runtime.snapshot = snapshot
+    try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
+    try Wire.encoder().encode(snapshot).write(to: URL(fileURLWithPath: output).appendingPathComponent("accounts.json"))
+    func capture<V: View>(_ view: V, width: CGFloat, height: CGFloat, name: String, dark: Bool) throws {
+        let host = NSHostingView(rootView: view.background(dark ? Color(red: 0.11, green: 0.11, blue: 0.12) : Color(red: 0.96, green: 0.96, blue: 0.97)).environment(\.colorScheme, dark ? .dark : .light))
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: image)
+        try #require(image.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: output).appendingPathComponent(name + ".png"))
+        if name.contains("pins") { #expect(host.fittingSize.width <= width) }
+    }
+    for dark in [false, true] {
+        let suffix = dark ? "dark" : "light"
+        try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
+        for account in snapshot.accounts.prefix(4) {
+            try capture(AccountCard(account: account), width: 336, height: 460, name: "native-\(account.provider)-\(suffix)", dark: dark)
+        }
+        try capture(HStack(spacing: 14) { Spacer(); MenuPins(runtime: runtime); Text("Mon Sep 7 16:00").font(.system(size: 12)) }.padding(.horizontal, 12), width: 1440, height: 24, name: "native-14-pins-\(suffix)", dark: dark)
+        try capture(AccountDetails(account: snapshot.accounts[0]).padding(12), width: 336, height: 1800, name: "native-details-\(suffix)", dark: dark)
+    }
+    for index in snapshot.accounts.indices { snapshot.accounts[index].pinned = false; snapshot.accounts[index].pinOrder = nil }
+    runtime.snapshot = snapshot
+    try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-unpinned", dark: false)
+    let fallback = NSHostingView(rootView: MenuPins(runtime: runtime))
+    #expect(fallback.fittingSize.width < 50)
+    snapshot.accounts = []
+    runtime.snapshot = snapshot
+    try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-empty", dark: true)
+}
+
+@Test func cardsAndPinsSelectDistinctDurationsWithoutHidingUnknowns() async throws {
+    let now = Date()
+    func window(_ id: String, duration: Double?, used: Double?, scope: String = "account", cadence: String = "rolling") -> QuotaWindow {
+        var result = QuotaWindow(id: id, label: id, scope: scope, cadence: cadence, durationSeconds: duration, durationSource: "provider", usedPercent: used, resetAt: now.addingTimeInterval(1800))
+        result.derive(at: now, groupStale: false)
+        return result
+    }
+    var account = Account(id: "fixture", name: "Fixture")
+    let windows = [window("week", duration: 604800, used: 12), window("b", duration: 18000, used: 80),
+                   window("a", duration: 18000, used: 80), window("fable", duration: 600, used: 99, scope: "model"),
+                   window("month", duration: 1000, used: 99, cadence: "monthly"), window("unknown", duration: nil, used: 25)]
+    account.groups.quotas.succeed(Quotas(windows: windows), at: now)
+    account.derivePresentation()
+    #expect(account.pin.lines.map(\.windowId) == ["a", "week"])
+    #expect(account.pin.lines.map(\.remainingPercent) == [20, 88])
+    #expect(account.overviewWindows.last?.id == "unknown")
+    #expect(account.overviewWindows.filter { $0.durationSeconds == 18000 }.map(\.id) == ["a", "b"])
+    account.groups.quotas.data?.windows.append(window("missing", duration: 18000, used: nil))
+    account.derivePresentation()
+    #expect(account.pin.lines.first?.windowId == "missing")
+    #expect(account.pin.lines.first?.remainingPercent == nil)
+    account.groups.quotas.data?.windows[0].stale = true
+    account.derivePresentation()
+    #expect(account.pin.warning)
+    #expect(account.pin.lines.last?.remainingPercent == 88)
+    account.groups.quotas.succeed(Quotas(windows: [windows[4], windows[5]]), at: now)
+    account.derivePresentation()
+    #expect(account.pin.lines.isEmpty)
+    #expect(account.overviewWindows.last?.remainingPercent == 75)
+    account.groups.quotas.observedAt = nil
+    account.derivePresentation()
+    #expect(account.pin.lines.isEmpty)
+    let owner = TallyOwner(clock: { now }, inventory: {
+        InventoryRead(databaseIdentity: "pin-fixture", credentials: [StoredCredential(storedID: "pin", name: "Pin", key: "synthetic")])
+    }, collect: { _ in GoObservation(windows: windows) })
+    try await owner.refresh(); await owner.waitForCollection()
+    let shared = try #require(await owner.snapshot().accounts.first)
+    #expect(shared.pin.lines.map(\.windowId) == ["a", "week"])
+    #expect(shared.overviewWindows.last?.id == "unknown")
+    await owner.shutdown()
 }
 
 @Test func grokCompatibleOmissionActualPeriodAndCreditUnits() throws {

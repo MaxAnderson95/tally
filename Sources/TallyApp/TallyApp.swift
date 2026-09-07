@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import TallyCore
 import TallyHTTP
+import Combine
 
 @MainActor
 final class Runtime: ObservableObject {
@@ -114,6 +115,7 @@ final class Runtime: ObservableObject {
 struct Dashboard: View {
     @ObservedObject var runtime: Runtime
     @State private var settings = false
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -122,7 +124,7 @@ struct Dashboard: View {
                     Spacer()
                     Button("Refresh") { Task { await runtime.refresh() } }
                 }
-                if let updated = runtime.snapshot?.accounts.compactMap({ $0.groups.quotas.observedAt }).max() {
+                if let updated = runtime.snapshot?.accounts.compactMap(\.latestObservation).max() {
                     Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
                 } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary) }
                 if let error = runtime.listenerError {
@@ -138,7 +140,23 @@ struct Dashboard: View {
                 if runtime.snapshot?.accounts.isEmpty != false {
                     Text("No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Settings.")
                 }
-                ForEach(runtime.snapshot?.accounts ?? []) { account in AccountCard(account: account) }
+                let accounts = runtime.snapshot?.accounts ?? []
+                if accounts.contains(where: \.pinned) {
+                    Text("Pinned").font(.caption).foregroundStyle(.secondary)
+                    ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account) }
+                }
+                if accounts.contains(where: { !$0.pinned }) {
+                    Text("Other accounts").font(.caption).foregroundStyle(.secondary)
+                    ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
+                        let others = accounts.filter { !$0.pinned && $0.provider == provider }
+                        if !others.isEmpty {
+                            Text(ProviderArtwork.logos[provider]?.name ?? provider).font(.caption).foregroundStyle(.secondary)
+                            ForEach(others) { account in AccountCard(account: account) }
+                        }
+                    }
+                }
+                Text("Recorded OpenCode activity").font(.headline)
+                Text("Activity is not available in this build.").font(.caption).foregroundStyle(.secondary)
                 Divider()
                 HStack {
                     Button("Settings") { settings.toggle() }
@@ -165,20 +183,19 @@ struct Dashboard: View {
                     TextField("Allowed HTTPS web origin (optional)", text: $runtime.webOrigin)
                     Button("Save settings and restart listener") { Task { await runtime.saveSettings() } }
                 }
-            }.padding(18)
-        }.frame(width: 360).frame(maxHeight: 650)
+            }.padding(12)
+        }.frame(width: 360).frame(maxHeight: 650).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
     }
 }
 
 struct AccountCard: View {
     let account: Account
+    @State private var details = false
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
-        let extraTitle = account.provider == "xai" ? "PAYG" : "Extra usage"
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                if account.provider == "opencode-go" {
-                    GoLogo().fill(style: FillStyle(eoFill: true)).frame(width: 22, height: 22).accessibilityLabel("OpenCode Go")
-                } else { Text(account.provider).font(.caption) }
+                ProviderLogo(provider: account.provider, color: account.identityColorIndex)
                 VStack(alignment: .leading) {
                     Text(account.name).font(.headline)
                     Text(account.groups.plan.data?.name ?? "Plan unknown").font(.caption).foregroundStyle(.secondary)
@@ -187,10 +204,16 @@ struct AccountCard: View {
                 if account.groups.quotas.stale || account.groups.quotas.data?.windows.contains(where: { $0.stale }) == true {
                     Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stale reading")
                 }
+                if account.command.state != nil {
+                    Button { details = true } label: { Image(systemName: "exclamationmark.triangle") }.help("Reset operation warning")
+                }
+                Button { details.toggle() } label: { Image(systemName: details ? "chevron.up" : "chevron.down") }
+                    .buttonStyle(.plain).accessibilityLabel("Details for \(account.name)")
             }
-            let windows = account.groups.quotas.data?.windows.filter(\.displayInOverview) ?? []
+            let windows = account.overviewWindows
             if windows.isEmpty {
                 Text("?").font(.system(size: 30, weight: .semibold))
+                Rectangle().stroke(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(height: 4)
                 Text(account.groups.quotas.observedAt == nil ? "Quota unavailable" : "No quota windows reported").font(.caption)
             }
             ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
@@ -199,6 +222,8 @@ struct AccountCard: View {
                         if index == 0 && window.durationSeconds != nil {
                             Text(percent(window.remainingPercent)).font(.system(size: 30, weight: .semibold))
                             Text("\(window.label) remaining").font(.caption)
+                            Spacer(minLength: 0)
+                            Text(timing(window)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
                         } else {
                             Text(window.label).font(.subheadline)
                             Spacer()
@@ -213,18 +238,18 @@ struct AccountCard: View {
                     }.frame(height: 4)
                         .overlay {
                             if window.durationSeconds == nil || window.remainingPercent == nil {
-                                Rectangle().stroke(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).padding(-2)
+                                Rectangle().strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                             }
                         }
                         .accessibilityLabel("\(percent(window.remainingPercent)) remaining")
-                    Text(timing(window)).font(.caption).foregroundStyle(.secondary)
+                    if !(index == 0 && window.durationSeconds != nil) { Text(timing(window)).font(.caption).foregroundStyle(.secondary) }
                 }
             }
             if account.provider == "anthropic" || account.provider == "xai" {
                 let extra = account.groups.extraUsage
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(extraTitle)
+                        Text(account.provider == "xai" ? "PAYG" : "Extra usage")
                         Spacer()
                         Text(extraLabel(extra.data)).multilineTextAlignment(.trailing)
                     }.font(.subheadline)
@@ -237,40 +262,18 @@ struct AccountCard: View {
                         }.frame(height: 4)
                         Text("\(money(data.used)) used of \(money(data.limit))").font(.caption)
                     }
-                    if extra.stale { Text("\(extraTitle) stale").font(.caption) }
+                    if extra.stale { Text(account.provider == "xai" ? "PAYG stale" : "Extra usage stale").font(.caption) }
                 }
             }
             if account.provider == "openai" { OpenAICreditDetails(account: account) }
-            DisclosureGroup("Details") {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                    GridRow { Text("Observed"); Text(account.groups.quotas.observedAt?.formatted() ?? "Never") }
-                    GridRow { Text("Last attempt"); Text(account.groups.quotas.lastAttemptAt?.formatted() ?? "Never") }
-                    GridRow { Text("Collection"); Text(account.groups.quotas.refreshing ? "Refreshing" : account.groups.quotas.stale ? "Stale" : "Current") }
-                    GridRow { Text("Next attempt"); Text(account.groups.quotas.nextAttemptAt?.formatted() ?? "Not scheduled") }
-                    GridRow { Text("Timezone"); Text(TimeZone.current.identifier) }
-                    if let error = account.groups.quotas.error { GridRow { Text("Error"); Text(error.message) } }
-                    if account.provider == "anthropic" || account.provider == "xai" {
-                        GridRow { Text("Plan observed"); Text(account.groups.plan.observedAt?.formatted() ?? "Never") }
-                        GridRow { Text("Plan collection"); Text(account.groups.plan.refreshing ? "Refreshing" : account.groups.plan.stale ? "Stale" : "Current") }
-                        if let error = account.groups.plan.error { GridRow { Text("Plan error"); Text(error.message) } }
-                        GridRow { Text("\(extraTitle) observed"); Text(account.groups.extraUsage.observedAt?.formatted() ?? "Never") }
-                        GridRow { Text("\(extraTitle) attempt"); Text(account.groups.extraUsage.lastAttemptAt?.formatted() ?? "Never") }
-                        GridRow { Text("\(extraTitle) next"); Text(account.groups.extraUsage.nextAttemptAt?.formatted() ?? "Not scheduled") }
-                        GridRow { Text("\(extraTitle) collection"); Text(account.groups.extraUsage.refreshing ? "Refreshing" : account.groups.extraUsage.stale ? "Stale" : "Current") }
-                        if let error = account.groups.extraUsage.error { GridRow { Text("\(extraTitle) error"); Text(error.message) } }
-                        if let used = account.groups.extraUsage.data?.used {
-                            GridRow { Text("\(extraTitle) source"); Text("\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")") }
-                        }
-                    }
-                    ForEach(windows) { window in
-                        GridRow { Text("\(window.label) scope"); Text(window.scopeNote ?? window.scope) }
-                        GridRow { Text("Used"); Text(percent(window.usedPercent)) }
-                        GridRow { Text("\(window.label) reset"); Text(window.resetAt?.formatted() ?? "Unavailable") }
-                        GridRow { Text("Pacing"); Text(window.pacing.map { "\($0.projectedUsedPercent.formatted(.number.precision(.fractionLength(0))))% projected at reset" } ?? window.pacingUnavailableReason ?? "Unavailable") }
-                    }
-                }.font(.caption).padding(.top, 8)
-            }.font(.caption)
-        }.padding(16).background(.background, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.2)))
+            if details {
+                if let state = account.command.state {
+                    Text(state == "unknown" ? "Reset outcome unknown; acknowledgement required in Tally reset controls." : "Redeeming…").font(.caption)
+                    Text(account.command.blockingOperationId ?? "").font(.caption).textSelection(.enabled)
+                }
+                AccountDetails(account: account)
+            }
+        }.padding(12).background(scheme == .dark ? Color(red: 44/255, green: 44/255, blue: 46/255) : .white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.2)))
     }
     private func percent(_ number: Double?) -> String { number.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "?" }
     private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
@@ -284,20 +287,10 @@ struct AccountCard: View {
     }
     private func timing(_ window: QuotaWindow) -> String {
         let duration = window.durationSeconds == nil ? "Duration unknown. " : ""
+        if window.resetState == "not_started" { return "Not started" }
         if window.resetState == "passed" { return duration + "Reset time passed; awaiting update" }
         guard let reset = window.resetAt else { return duration + "Reset time unavailable" }
         return duration + "Resets \(reset.formatted(.relative(presentation: .named)))"
-    }
-}
-
-struct GoLogo: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let scale = rect.width / 24
-        path.addRect(CGRect(x: 3 * scale, y: 3 * scale, width: 18 * scale, height: 18 * scale))
-        path.addRect(CGRect(x: 7 * scale, y: 7 * scale, width: 10 * scale, height: 10 * scale))
-        path.addRect(CGRect(x: 13 * scale, y: 9 * scale, width: 2 * scale, height: 6 * scale))
-        return path
     }
 }
 
@@ -306,13 +299,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = Runtime()
     private var item: NSStatusItem!
     private let popover = NSPopover()
+    private var pins: NSHostingView<MenuPins>!
+    private var subscription: AnyCancellable?
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "chart.bar", accessibilityDescription: "Tally")
+        pins = NSHostingView(rootView: MenuPins(runtime: runtime))
+        pins.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(togglePopover)))
+        item.button?.addSubview(pins)
+        subscription = runtime.$snapshot.sink { [weak self] _ in
+            Task { @MainActor in self?.layoutPins() }
+        }
         item.button?.target = self; item.button?.action = #selector(togglePopover)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: Dashboard(runtime: runtime))
         runtime.start()
+    }
+    private func layoutPins() {
+        let size = pins.fittingSize
+        item.length = size.width
+        pins.frame = NSRect(x: 0, y: 0, width: size.width, height: NSStatusBar.system.thickness)
     }
     @objc func togglePopover() {
         if popover.isShown { popover.performClose(nil) }

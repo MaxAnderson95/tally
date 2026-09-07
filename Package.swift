@@ -12,7 +12,7 @@ let package = Package(
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .target(name: "TallyCore", dependencies: ["CSQLite"]),
         .target(name: "TallyHTTP", dependencies: ["TallyCore", .product(name: "Hummingbird", package: "hummingbird")]),
-        .executableTarget(name: "TallyApp", dependencies: ["TallyCore", "TallyHTTP"]),
-        .testTarget(name: "TallyTests", dependencies: ["TallyCore", "TallyHTTP", "CSQLite", .product(name: "HummingbirdTesting", package: "hummingbird")], resources: [.copy("Fixtures")])
+        .executableTarget(name: "TallyApp", dependencies: ["TallyCore", "TallyHTTP"], resources: [.copy("Resources/logos.json")]),
+        .testTarget(name: "TallyTests", dependencies: ["TallyCore", "TallyHTTP", "TallyApp", "CSQLite", .product(name: "HummingbirdTesting", package: "hummingbird")], resources: [.copy("Fixtures")])
     ]
 )
