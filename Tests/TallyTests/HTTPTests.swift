@@ -110,10 +110,13 @@ private struct AuthorityResponder: HTTPResponder {
     _ = await freshTask.result
 }
 
-@Test(arguments: ["anthropic", "openai"]) func providerRESTMatchesNativeOwnerReadings(provider: String) async throws {
+@Test(arguments: ["anthropic", "openai", "xai"]) func providerRESTMatchesNativeOwnerReadings(provider: String) async throws {
     let owner = TallyOwner(clock: { Date(timeIntervalSince1970: 1_915_031_000) }, inventory: {
         InventoryRead(databaseIdentity: "provider-db", credentials: [StoredCredential(storedID: "provider", name: "Fixture Account", key: "private-key", provider: provider)])
     }, collections: { _ in
+        if provider == "xai" {
+            return [CollectionJob(id: "billing", groups: [.quotas, .extraUsage, .balances, .resetSummary, .resetDetails]) { try GrokUsage.decode(fixture("grok-billing")) }]
+        }
         if provider == "openai" {
             return [CollectionJob(id: "usage", groups: [.plan, .quotas, .extraUsage, .balances, .resetSummary]) {
                 try OpenAIUsage.decodeUsage(fixture("openai-usage"), at: Date(timeIntervalSince1970: 1_915_031_000))
@@ -138,6 +141,10 @@ private struct AuthorityResponder: HTTPResponder {
             if provider == "anthropic" {
                 #expect(account.groups.quotas.data?.windows.filter { !$0.displayInOverview }.map(\.id) == ["weekly_scoped:sonnet"])
                 #expect(account.groups.extraUsage.data?.remaining?.amount == "8.75")
+            } else if provider == "xai" {
+                #expect(account.groups.quotas.data?.windows.first?.remainingPercent == 100)
+                #expect(account.groups.extraUsage.data?.remaining?.amount == "2374.5")
+                #expect(account.groups.extraUsage.data?.used?.currency == "credits")
             } else {
                 #expect(account.groups.quotas.data?.windows.filter(\.displayInOverview).map(\.label) == ["Weekly"])
                 #expect(account.groups.resetSummary.data?.source == "credit_details")

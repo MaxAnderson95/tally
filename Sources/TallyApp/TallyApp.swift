@@ -219,11 +219,11 @@ struct AccountCard: View {
                     Text(timing(window)).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if account.provider == "anthropic" {
+            if account.provider == "anthropic" || account.provider == "xai" {
                 let extra = account.groups.extraUsage
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Extra usage")
+                        Text(account.provider == "xai" ? "PAYG" : "Extra usage")
                         Spacer()
                         Text(extraLabel(extra.data)).multilineTextAlignment(.trailing)
                     }.font(.subheadline)
@@ -248,7 +248,7 @@ struct AccountCard: View {
                     GridRow { Text("Next attempt"); Text(account.groups.quotas.nextAttemptAt?.formatted() ?? "Not scheduled") }
                     GridRow { Text("Timezone"); Text(TimeZone.current.identifier) }
                     if let error = account.groups.quotas.error { GridRow { Text("Error"); Text(error.message) } }
-                    if account.provider == "anthropic" {
+                    if account.provider == "anthropic" || account.provider == "xai" {
                         GridRow { Text("Plan observed"); Text(account.groups.plan.observedAt?.formatted() ?? "Never") }
                         GridRow { Text("Plan collection"); Text(account.groups.plan.refreshing ? "Refreshing" : account.groups.plan.stale ? "Stale" : "Current") }
                         if let error = account.groups.plan.error { GridRow { Text("Plan error"); Text(error.message) } }

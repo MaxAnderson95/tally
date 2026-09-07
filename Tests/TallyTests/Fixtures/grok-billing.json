@@ -1,0 +1,8 @@
+{
+  "config": {
+    "currentPeriod": {"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2030-09-05T13:45:37.894507+00:00","end":"2030-09-12T13:45:37.894507+00:00"},
+    "onDemandCap":{"val":2500},
+    "onDemandUsed":{"val":125.5},
+    "isUnifiedBillingUser":true
+  }
+}

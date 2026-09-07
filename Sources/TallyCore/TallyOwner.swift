@@ -30,11 +30,13 @@ public actor TallyOwner {
         let usage = GoUsage()
         let anthropic = AnthropicUsage()
         let openai = OpenAIUsage()
+        let grok = GrokUsage()
         collections = { credential in
             switch credential.provider {
             case "opencode-go": [.go { try await usage.collect(key: credential.key) }]
             case "anthropic": [anthropic.job(access: credential.key), anthropic.planJob(access: credential.key)]
             case "openai": openai.jobs(access: credential.key, workspace: credential.workspace)
+            case "xai": grok.jobs(access: credential.key)
             default: []
             }
         }

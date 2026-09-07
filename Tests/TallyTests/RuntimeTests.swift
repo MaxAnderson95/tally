@@ -7,6 +7,85 @@ func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!)
 }
 
+@Test func grokCompatibleOmissionActualPeriodAndCreditUnits() throws {
+    var groups = AccountGroups()
+    for observation in try GrokUsage.decode(fixture("grok-billing")) { observation.apply(to: &groups, at: Date()) }
+    let window = try #require(groups.quotas.data?.windows.first)
+    #expect(window.usedPercent == 0)
+    #expect(window.durationSeconds == 604800)
+    #expect(window.durationSource == "provider")
+    #expect(window.resetAt == (try Date("2030-09-12T13:45:37.894507Z", strategy: .iso8601)))
+    let expected = try Wire.decoder().decode(ExtraUsage.self, from: fixture("grok-extra"))
+    #expect(try Wire.encoder().encode(groups.extraUsage.data) == Wire.encoder().encode(expected))
+    #expect(try GrokUsage.decodePlan(Data(#"{"default_model":"grok-4.6"}"#.utf8)) == nil)
+    #expect(try GrokUsage.decodePlan(Data(#"{"subscription_tier_display":" SuperGrok "}"#.utf8))?.name == "SuperGrok")
+    #expect(throws: Fault.self) { try GrokUsage.decodePlan(Data(#"{"subscription_tier_display":42}"#.utf8)) }
+}
+
+@Test func grokRejectsMalformedPresentPercentAndKeepsUnknownPAYG() throws {
+    let source = try String(decoding: fixture("grok-billing"), as: UTF8.self)
+    for value in ["null", "true", #""12""#, #""bad""#, "{}"] {
+        let json = source.replacingOccurrences(of: "\"config\": {", with: "\"config\": {\"creditUsagePercent\":\(value),")
+        #expect(throws: Fault.self) { try GrokUsage.decode(Data(json.utf8)) }
+    }
+    for json in ["{}", #"{"config":{}}"#, source.replacingOccurrences(of: "2030-09-12", with: "2030-09-01")] {
+        #expect(throws: Fault.self) { try GrokUsage.decode(Data(json.utf8)) }
+    }
+    func read(_ json: String) throws -> AccountGroups {
+        var groups = AccountGroups()
+        for observation in try GrokUsage.decode(Data(json.utf8)) { observation.apply(to: &groups, at: Date()) }
+        return groups
+    }
+    #expect(try read(source.replacingOccurrences(of: "TYPE_WEEKLY", with: "TYPE_MONTHLY")).quotas.data?.windows.isEmpty == true)
+    #expect(try read(source.replacingOccurrences(of: "2030-09-05", with: "2030-09-06")).quotas.data?.windows.first?.durationSeconds == 518400)
+    #expect(try read(source.replacingOccurrences(of: "2500", with: "0")).extraUsage.data?.presentation == "off")
+    #expect(try read(source.replacingOccurrences(of: "{\"val\":2500}", with: "{}")).extraUsage.data?.enabled == nil)
+    #expect(try read(source.replacingOccurrences(of: "{\"val\":125.5}", with: "{}")).extraUsage.data?.presentation == "unavailable")
+    #expect(try read(source.replacingOccurrences(of: "125.5", with: "0")).extraUsage.data?.remainingPercent == 100)
+    #expect(try read(source.replacingOccurrences(of: "125.5", with: "3000")).extraUsage.data?.remainingPercent == 0)
+    #expect(throws: Fault.self) { try read(source.replacingOccurrences(of: "125.5", with: "-1")) }
+    var extra = try Wire.decoder().decode(ExtraUsage.self, from: fixture("grok-extra"))
+    extra.limit = nil; extra.derive()
+    #expect(extra.presentation == "used_only" && extra.remaining == nil)
+    extra.limit = Money(amount: "2500", currency: "USD", source: Money.Source(amount: "2500", unit: "USD")); extra.derive()
+    #expect(extra.presentation == "used_only")
+}
+
+private final class GrokProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        #expect(request.httpMethod == "GET" && request.httpBody == nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer stored-grok")
+        #expect(request.value(forHTTPHeaderField: "X-XAI-Token-Auth") == "xai-grok-cli")
+        #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+        #expect([GrokUsage.endpoint, GrokUsage.settingsEndpoint].contains(request.url))
+        let settings = request.url == GrokUsage.settingsEndpoint
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: settings ? 401 : 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: settings ? Data("private upstream error".utf8) : (try! fixture("grok-billing")))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Test func grokOptionalSettingsFailurePreservesBillingAndPin() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [GrokProtocol.self]
+    let client = GrokUsage(session: URLSession(configuration: configuration))
+    let owner = TallyOwner(clock: { try! Date("2030-09-07T00:00:00Z", strategy: .iso8601) }, inventory: {
+        InventoryRead(databaseIdentity: "grok-db", credentials: [StoredCredential(storedID: "grok", name: "Grok", key: "stored-grok", provider: "xai")])
+    }, collections: { client.jobs(access: $0.key) }, collect: { _ in throw Fault("unexpected", "No Go request expected") })
+    try await owner.refresh(); await owner.waitForCollection()
+    let account = try #require(await owner.snapshot().accounts.first)
+    #expect(account.groups.plan.error?.code == "provider_unavailable")
+    #expect(account.groups.plan.data == nil)
+    #expect(!account.groups.quotas.stale && !account.groups.extraUsage.stale)
+    #expect(account.groups.extraUsage.data?.presentation == "bounded")
+    #expect(account.pin.lines.first?.remainingPercent == 100)
+    #expect(!String(decoding: try Wire.encoder().encode(account), as: UTF8.self).contains("private upstream"))
+    await owner.shutdown()
+}
+
 @Test func openAIMapsActualDurationsHiddenScopesAndCreditProvenance() throws {
     struct Expected: Decodable { var balances: Balances; var details: ResetDetails; var quotas: Quotas }
     let expected = try Wire.decoder().decode(Expected.self, from: fixture("openai-readings"))

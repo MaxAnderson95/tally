@@ -25,8 +25,8 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       </div>
       <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>
     </section>)}
-    {account.provider === 'anthropic' && <section className="quota" aria-label="Extra usage">
-      <div className="window-heading"><span>Extra usage</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
+    {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={account.provider === 'xai' ? 'PAYG' : 'Extra usage'}>
+      <div className="window-heading"><span>{account.provider === 'xai' ? 'PAYG' : 'Extra usage'}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
       {extra.data?.presentation === 'bounded' && <>
         <div className="bar" aria-label={`${percentage(extra.data.remainingPercent)} remaining`}><div style={{ width: `${extra.data.remainingPercent}%` }} /></div>
         <p className="timing">{moneyLabel(extra.data.used)} used of {moneyLabel(extra.data.limit)}</p>
@@ -76,7 +76,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       <dt>Next attempt</dt><dd>{quota.nextAttemptAt ? exact(quota.nextAttemptAt) : 'Not scheduled'}</dd>
       <dt>Timezone</dt><dd>{timezone}</dd>
       {quota.error && <><dt>Error</dt><dd>{quota.error.message}</dd></>}
-      {account.provider === 'anthropic' && <>
+      {(account.provider === 'anthropic' || account.provider === 'xai') && <>
         <dt>Plan observed</dt><dd>{exact(account.groups.plan.observedAt)}</dd>
         <dt>Plan collection</dt><dd>{account.groups.plan.refreshing ? 'Refreshing' : groupIsStale(account.groups.plan) ? 'Stale' : 'Current'}</dd>
         {account.groups.plan.error && <><dt>Plan error</dt><dd>{account.groups.plan.error.message}</dd></>}

@@ -3,6 +3,15 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 
+test('Grok PAYG uses the exact native/REST credit amounts without dollar conversion', () => {
+  const extra: ExtraUsage = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/grok-extra.json', import.meta.url), 'utf8'))
+  assert.equal(extra.presentation, 'bounded')
+  assert.equal(moneyLabel(extra.remaining), 'credits 2374.5')
+  assert.equal(moneyLabel(extra.used), 'credits 125.5')
+  assert.equal(percentage(extra.remainingPercent), '95%')
+  assert.equal(extra.used?.source.unit, 'credits')
+})
+
 test('OpenAI shared normalized credits preserve provenance, zero, null, and expiry states', () => {
   const reading: { quotas: { windows: QuotaWindow[] }; balances: { items: Balance[] }; details: { credits: Credit[]; summary: ResetSummary } } = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/openai-readings.json', import.meta.url), 'utf8'))
   const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
