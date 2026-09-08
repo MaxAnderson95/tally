@@ -40,9 +40,11 @@ import Testing
 @Test func redemptionPresentationKeepsExpiryAndConfirmedCollectionFailureDistinct() throws {
     var account = try Wire.decoder().decode(AccountsResponse.self, from: fixture("accounts")).accounts[0]
     let operation = try Wire.decoder().decode([Redemption].self, from: fixture("redemptions"))[3]
-    #expect(operation.displayMessage(for: account) == "Reset confirmed; usage update unavailable")
+    #expect(operation.displayMessage(for: account) == "Reset confirmed. Current usage readings are stale or unavailable.")
     account.groups.quotas.stale = false; account.groups.quotas.error = nil
     #expect(operation.displayMessage(for: account) == "Credit already redeemed; no additional reset claimed.")
+    account.groups.quotas.stale = true
+    #expect(operation.displayMessage(for: account) == "Reset confirmed. Current usage readings are stale or unavailable.")
     var credit = Credit(id: "a", status: "available", available: true, expiry: Credit.Expiry(kind: "unknown"))
     #expect(credit.isUsable)
     credit.expiry = Credit.Expiry(kind: "none")

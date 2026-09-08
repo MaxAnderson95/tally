@@ -2,13 +2,15 @@
 
 Native and web credit rows open an inline confirmation naming the Account and one-credit consumption. Cancel only dismisses the confirmation. The pending operation disables every Use action for its Account, with Redeeming on the selected credit. Credit availability and expiry control selection; a null or zero provider-applicable count does not disable an available credit.
 
-The card header retains an accessible unknown-outcome warning independently of credit details. Its explanation says a credit may have been consumed, the outcome stays unknown, and acknowledgement never retries consumption. Acknowledgement releases the block only after the owner durably records it. Confirmed operations with stale or failed collection say "Reset confirmed; usage update unavailable".
+The card header retains an accessible unknown-outcome warning independently of credit details. Its explanation says a credit may have been consumed, the outcome stays unknown, and acknowledgement never retries consumption. Acknowledgement releases the block only after the owner durably records it. Confirmed operations with stale or failed collection say "Reset confirmed. Current usage readings are stale or unavailable." This describes current readings, not a recorded post-reset collection outcome.
 
 ## Identity and recovery
 
 The browser saves the UUID in local storage before submitting and declines submission if that write fails. The native Runtime retains operations outside the popover and discovers owner-journal blocks when reading its snapshot. Both clients read existing operations after views reopen. Browser visibility return and app-build reload recover the saved UUID; accepted pending operations are read every second while visible. Closing credit details does not stop this polling. A server rejection preserves its fault, while ambiguous transport and recovery-storage failures retain the existing identity and block.
 
 The owner's journal remains authoritative. Chrome replayed a socket-dropped submission three times in the controlled browser check, all with the same UUID and credit. The synthetic server accepted one operation; the existing owner tests separately verify that repeated submissions cannot cause another provider consume.
+
+A structured missing-operation or invalid-UUID read clears the browser's saved identity only after the owner's status confirms recovery storage is available. Failed reads and unavailable recovery storage retain the block. Clearing identity sends no consume request; any later reset still requires deliberate confirmation and the owner's journal checks.
 
 ## Verification
 
@@ -18,7 +20,7 @@ The owner's journal remains authoritative. Chrome replayed a socket-dropped subm
 - `bash scripts/build-app.sh`: TypeScript check, Vite production build, arm64 release build, app packaging, and ad-hoc signing passed. Dependency audit reported zero vulnerabilities. `codesign --verify --deep --strict build/Tally.app` and `git diff --check` passed.
 - The local `tally-reset-browser.cjs` controlled HTTP scenario passed in installed Chrome through the existing external Playwright runner. It checks actual confirmation/cancel, per-Account disabling, null/zero applicability, unknown/spent credits, one-second operation polls, hidden pause, disconnect/reconnect, app-build reload, unavailable-details warnings, acknowledgement failure/success, and confirmed failed-refresh wording. It recorded one accepted operation, three same-UUID HTTP deliveries, two explicit acknowledgement requests, and no JavaScript exceptions.
 
-The browser scenario is in the session's OpenCode temporary directory. Run it with `node /private/var/folders/3x/8r6wdjl562z7cr1r0_zwz3q80000gn/T/opencode/tally-reset-browser.cjs` after `npm --prefix web run build`.
+The browser scenario was a temporary script and was not retained in the repository. The browser results above record that one-time check and cannot be reproduced from this checkout.
 
 ## Visual evidence and limits
 

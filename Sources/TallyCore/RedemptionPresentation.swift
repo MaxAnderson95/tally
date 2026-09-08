@@ -12,7 +12,7 @@ public extension Redemption {
         case .pending: return "Redeeming…"
         case .confirmed:
             if account.groups.quotas.stale || account.groups.quotas.error != nil || account.groups.resetDetails.error != nil {
-                return "Reset confirmed; usage update unavailable"
+                return "Reset confirmed. Current usage readings are stale or unavailable."
             }
             return providerResult?.code == "already_redeemed" ? "Credit already redeemed; no additional reset claimed." : "Reset confirmed."
         case .nothing_to_reset: return "Provider reports nothing to reset."

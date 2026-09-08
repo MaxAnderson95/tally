@@ -1,4 +1,4 @@
-import type { Account, Credit, Redemption } from './api.ts'
+import type { Account, Credit, Fault, Redemption, Status } from './api.ts'
 
 export function creditUsable(credit: Credit, now = Date.now()) {
   return credit.available === true && (credit.expiry.kind !== 'at' || Date.parse(credit.expiry.at) > now)
@@ -8,7 +8,7 @@ export function redemptionLabel(operation: Redemption, account: Account) {
   switch (operation.state) {
     case 'pending': return 'Redeeming…'
     case 'confirmed': return account.groups.quotas.stale || account.groups.quotas.error || account.groups.resetDetails.error
-      ? 'Reset confirmed; usage update unavailable'
+      ? 'Reset confirmed. Current usage readings are stale or unavailable.'
       : operation.providerResult?.code === 'already_redeemed' ? 'Credit already redeemed; no additional reset claimed.' : 'Reset confirmed.'
     case 'nothing_to_reset': return 'Provider reports nothing to reset.'
     case 'no_credit': return 'No available reset credit.'
@@ -51,7 +51,25 @@ export class RedemptionClient {
     this.operationId = id
     try {
       this.storage.setItem(this.key, id)
-      const operation = await this.request(`/redemptions/${encodeURIComponent(id)}`)
+      const response = await this.transport(`/api/v1/redemptions/${encodeURIComponent(id)}`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) {
+        const body: { error: Fault } = await response.json()
+        if ((response.status === 404 && body.error.code === 'operation_not_found') || (response.status === 400 && body.error.code === 'invalid_request')) {
+          const statusResponse = await this.transport('/api/v1/status', { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
+          if (!statusResponse.ok) throw new Error('Owner status unavailable')
+          const status: Status = await statusResponse.json()
+          if (revision !== this.revision) return
+          if (status.apiMajor === 1 && status.recoveryStorage.available) {
+            this.storage.removeItem(this.key)
+            this.operationId = null
+            this.operation = undefined
+            this.error = 'Saved operation is not available on this owner. No reset was resent.'
+            return
+          }
+        }
+        throw new Error('Operation unavailable')
+      }
+      const operation: Redemption = await response.json()
       if (revision !== this.revision) return
       this.operation = operation
       this.error = undefined

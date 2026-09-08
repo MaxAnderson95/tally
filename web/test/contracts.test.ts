@@ -76,7 +76,11 @@ test('reset controls decline unavailable identity storage and show confirmed sta
   assert.match(client.error!, /No reset was sent/)
   const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
   const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
-  assert.equal(redemptionLabel(operations[3], account), 'Reset confirmed; usage update unavailable')
+  assert.equal(redemptionLabel(operations[3], account), 'Reset confirmed. Current usage readings are stale or unavailable.')
+  account.groups.quotas.stale = false; account.groups.quotas.error = null
+  assert.equal(redemptionLabel(operations[3], account), 'Credit already redeemed; no additional reset claimed.')
+  account.groups.quotas.stale = true
+  assert.equal(redemptionLabel(operations[3], account), 'Reset confirmed. Current usage readings are stale or unavailable.')
   const credit: Credit = { id: 'a', type: null, status: 'available', available: true, title: null, description: null, grantedAt: null, expiry: { kind: 'unknown', at: null } }
   assert.equal(creditUsable(credit), true)
   assert.equal(creditUsable({ ...credit, expiry: { kind: 'none', at: null } }), true)
@@ -110,6 +114,44 @@ test('a server rejection names the fault without creating a permanent browser-on
   assert.equal(client.operationId, null)
   assert.equal(stored.size, 0)
   assert.equal(client.error, 'Current Account identity is unavailable.')
+})
+
+test('orphan recovery clears identity only for authoritative faults with healthy owner storage', async () => {
+  for (const [status, code, available, cleared] of [
+    [404, 'operation_not_found', true, true],
+    [400, 'invalid_request', true, true],
+    [404, 'operation_not_found', false, false],
+    [400, 'invalid_request', false, false],
+    [404, 'not_found', true, false],
+    [503, 'recovery_storage_unavailable', true, false],
+  ] as const) {
+    const stored = new Map([['tally.redemption.a', 'orphan']])
+    const calls: string[] = []
+    const client = new RedemptionClient('a', { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value) }, removeItem: key => { stored.delete(key) } }, async (url, init) => {
+      assert.equal(init?.method ?? 'GET', 'GET')
+      calls.push(String(url))
+      return String(url).endsWith('/status') ? Response.json({ apiMajor: 1, recoveryStorage: { available } }) : Response.json({ error: { code } }, { status })
+    })
+    await client.recover()
+    assert.equal(client.blocked, !cleared)
+    assert.equal(client.operationId, cleared ? null : 'orphan')
+    assert.equal(stored.size, cleared ? 0 : 1)
+    if (cleared) {
+      assert.match(client.error!, /No reset was resent/)
+      await client.recover()
+      assert.equal(calls.length, 2)
+    }
+  }
+})
+
+test('orphan recovery retains identity when the storage health read fails', async () => {
+  const client = new RedemptionClient('a', { getItem: () => 'orphan', setItem: () => {}, removeItem: () => { assert.fail('Must retain identity') } }, async url => {
+    if (String(url).endsWith('/status')) throw new Error('Disconnected')
+    return Response.json({ error: { code: 'operation_not_found' } }, { status: 404 })
+  })
+  await client.recover()
+  assert.equal(client.blocked, true)
+  assert.equal(client.operationId, 'orphan')
 })
 
 test('redemption wire states preserve original selection, uncertainty and explicit acknowledgement', () => {
