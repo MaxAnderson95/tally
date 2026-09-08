@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "used": {"amount": "1.25", "currency": "USD", "provenance": "provider", "source": {"amount": "125", "unit": "amount_minor", "exponent": 2}},
+  "limit": {"amount": "10", "currency": "USD", "provenance": "provider", "source": {"amount": "1000", "unit": "amount_minor", "exponent": 2}},
+  "remaining": {"amount": "8.75", "currency": "USD", "provenance": "provider", "source": {"amount": "8.75", "unit": "USD", "exponent": null}},
+  "remainingPercent": 87.5,
+  "periodLabel": null,
+  "presentation": "bounded"
+}

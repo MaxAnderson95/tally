@@ -1,0 +1,24 @@
+{
+  "status": {
+    "apiMajor": 1, "appBuild": "fixture", "serverTime": "2030-09-07T12:00:00Z", "timezone": "America/New_York", "owner": "ready",
+    "inventory": {"data":{"count":1,"namespaceId":"fixture-namespace"},"observedAt":"2030-09-07T12:00:00Z","lastAttemptAt":"2030-09-07T12:00:00Z","stale":false,"refreshing":false,"nextAttemptAt":null,"error":null},
+    "recoveryStorage": {"available":false,"error":{"code":"not_implemented","message":"Command recovery storage is not available in this slice.","retryAt":null,"blockingOperationId":null}}
+  },
+  "accounts": [{
+    "id":"fixture-account", "provider":"opencode-go", "service":"opencode-go", "name":"Fixture Go", "pinned":true, "pinOrder":0, "identityColorIndex":0,
+    "pin":{"lines":[{"windowId":"rolling","label":"5-hour","remainingPercent":87.5,"stale":true},{"windowId":"weekly","label":"Weekly","remainingPercent":null,"stale":true}],"warning":true},
+    "command":{"blockingOperationId":null,"state":null,"acknowledgementRequired":false},
+    "groups": {
+      "plan":{"data":{"name":"Go"},"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T12:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":{"code":"provider_unavailable","message":"OpenCode Go could not be reached.","retryAt":null,"blockingOperationId":null}},
+      "quotas":{"data":{"windows":[
+        {"id":"rolling","label":"5-hour","scope":"account","scopeNote":null,"modelId":null,"cadence":"rolling","durationSeconds":18000,"durationSource":"verified_mapping","usedPercent":12.5,"remainingPercent":87.5,"resetAt":"2030-09-07T15:00:00Z","resetState":"scheduled","stale":true,"displayInOverview":true,"pacing":null,"pacingUnavailableReason":"Fresh usage, duration, and a future reset are required."},
+        {"id":"weekly","label":"Weekly","scope":"account","scopeNote":null,"modelId":null,"cadence":"weekly","durationSeconds":604800,"durationSource":"verified_mapping","usedPercent":null,"remainingPercent":null,"resetAt":null,"resetState":"unknown","stale":true,"displayInOverview":true,"pacing":null,"pacingUnavailableReason":"Fresh usage, duration, and a future reset are required."},
+        {"id":"monthly","label":"Monthly","scope":"account","scopeNote":null,"modelId":null,"cadence":"monthly","durationSeconds":null,"durationSource":"unknown","usedPercent":0,"remainingPercent":100,"resetAt":"2030-10-03T01:07:51Z","resetState":"scheduled","stale":true,"displayInOverview":true,"pacing":null,"pacingUnavailableReason":"Fresh usage, duration, and a future reset are required."}
+      ]},"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T12:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":{"code":"provider_unavailable","message":"OpenCode Go could not be reached.","retryAt":null,"blockingOperationId":null}},
+      "extraUsage":{"data":null,"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T11:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":null},
+      "balances":{"data":null,"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T11:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":null},
+      "resetSummary":{"data":null,"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T11:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":null},
+      "resetDetails":{"data":null,"observedAt":"2030-09-07T11:00:00Z","lastAttemptAt":"2030-09-07T11:00:00Z","stale":true,"refreshing":false,"nextAttemptAt":null,"error":null}
+    }
+  }]
+}

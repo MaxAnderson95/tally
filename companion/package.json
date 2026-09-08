@@ -1,0 +1,16 @@
+{
+  "name": "tally-opencode",
+  "version": "0.1.0",
+  "description": "OpenCode V2 model queries for the resident Tally app",
+  "type": "module",
+  "exports": { ".": "./dist/index.js" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "zod": "4.1.8" },
+  "devDependencies": { "@opencode/plugin": "0.0.0-beta-19278", "typescript": "5.9.3", "@types/node": "22.19.1" }
+}

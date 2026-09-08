@@ -1,0 +1,10 @@
+{
+  "available_count": 2,
+  "applicable_available_count": null,
+  "credits": [
+    {"id": "a", "reset_type": "full", "status": "available", "title": "Monthly grant", "description": "Provider decides scope", "granted_at": "2030-08-01T00:00:00Z", "expires_at": "2030-10-01T00:00:00Z"},
+    {"id": "b", "reset_type": "full", "status": "available", "expires_at": null},
+    {"id": "c", "status": "future_status"},
+    {"id": "d", "status": "expired", "expires_at": "2020-01-01T00:00:00Z"}
+  ]
+}

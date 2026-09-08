@@ -1,0 +1,8 @@
+.build/
+build/
+web/node_modules/
+web/dist/
+companion/node_modules/
+companion/dist/
+companion/*.tgz
+.DS_Store
