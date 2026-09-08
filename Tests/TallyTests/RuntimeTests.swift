@@ -483,6 +483,42 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(!String(decoding: try Data(contentsOf: storage), as: UTF8.self).contains("\"key\""))
 }
 
+@Test func tokenRotationPreservesFreshReadingsAndCancelsRefresh() async throws {
+    let scenario = SchedulingScenario()
+    var credential = StoredCredential(storedID: "a", name: "A", key: "old", provider: "anthropic", refresh: "continuity")
+    scenario.set([credential])
+    let (values, continuation) = AsyncStream<GoObservation>.makeStream()
+    defer { continuation.finish() }
+    let owner = TallyOwner(clock: { scenario.now() }, inventory: { scenario.inventory() }, collections: { _ in
+        [.go {
+            for await value in values { return value }
+            throw Fault("cancelled", "Synthetic collection cancelled.")
+        }]
+    }, collect: { _ in throw Fault("unexpected", "Uses synthetic jobs.") })
+    try await owner.refresh()
+    continuation.yield(GoObservation(windows: []))
+    await owner.waitForCollection()
+    let first = await owner.snapshot().accounts[0]
+    scenario.advance(15)
+    try await owner.refresh()
+    #expect(await owner.snapshot().accounts[0].groups.quotas.refreshing)
+    credential.key = "rotated"
+    scenario.set([credential])
+    #expect(try await owner.refresh().accounts[0].schedule.state == "deferred")
+    let rotated = await owner.snapshot().accounts[0]
+    #expect(rotated.id == first.id)
+    #expect(!rotated.groups.plan.stale && !rotated.groups.plan.refreshing)
+    #expect(!rotated.groups.quotas.stale && !rotated.groups.quotas.refreshing)
+    #expect(!rotated.groups.extraUsage.stale && !rotated.groups.extraUsage.refreshing)
+    #expect(!rotated.groups.balances.stale && !rotated.groups.balances.refreshing)
+    #expect(!rotated.groups.resetSummary.stale && !rotated.groups.resetSummary.refreshing)
+    #expect(!rotated.groups.resetDetails.stale && !rotated.groups.resetDetails.refreshing)
+    #expect(rotated.groups.quotas.observedAt == first.groups.quotas.observedAt)
+    #expect(rotated.groups.quotas.data?.windows.isEmpty == true)
+    #expect(rotated.groups.quotas.error == nil)
+    await owner.shutdown()
+}
+
 @Test func rejectedAndExpiredCredentialsRequireChangedUsableTokens() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -573,6 +609,16 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(aged.accounts[0].groups.quotas.observedAt == first.accounts[0].groups.quotas.observedAt)
     #expect(aged.accounts[0].groups.quotas.data?.windows[0].pacing == nil)
     #expect(scenario.count("a") == 1)
+    var cache = AccountIdentityStore(url: storage)
+    let duplicate = try #require(cache.state.namespaces["db"]?.records.first)
+    cache.state.namespaces["db"]?.records.append(duplicate)
+    try cache.save()
+    let restarted = scenario.owner(storage: storage)
+    try await restarted.refresh(); await restarted.waitForCollection()
+    let recovered = await restarted.snapshot()
+    #expect(recovered.accounts.map(\.id) == first.accounts.map(\.id))
+    #expect(recovered.accounts.allSatisfy { !$0.groups.quotas.stale })
+    #expect(scenario.count("a") == 2)
 }
 
 @Test func pacingBoundariesAndRetryAfterParsing() throws {

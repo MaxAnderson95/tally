@@ -144,7 +144,7 @@ public actor TallyOwner {
             for index in namespace.records.indices { namespace.records[index].account.groups.restoreStale() }
             store.state.namespaces[identity] = namespace
             accounts = namespace.records.filter(\.present).map(\.account)
-            attempts = Dictionary(uniqueKeysWithValues: namespace.records.filter(\.present).map { ($0.account.id, $0.attempts ?? [:]) })
+            attempts = Dictionary(namespace.records.filter(\.present).map { ($0.account.id, $0.attempts ?? [:]) }, uniquingKeysWith: { _, latest in latest })
             inventory.data = Inventory(count: accounts.count, namespaceId: namespace.id)
             inventory.observedAt = namespace.observedAt
         } else { store.state.namespaces[identity] = InventoryNamespace() }
@@ -179,7 +179,12 @@ public actor TallyOwner {
             account.name = credential.name
             if let previous = credentials[account.id], previous.fingerprint != credential.fingerprint {
                 for key in tasks.keys where key.account == account.id { tasks[key]?.cancel(); tasks[key] = nil }
-                account.groups.restoreStale()
+                account.groups.plan.refreshing = false
+                account.groups.quotas.refreshing = false
+                account.groups.extraUsage.refreshing = false
+                account.groups.balances.refreshing = false
+                account.groups.resetSummary.refreshing = false
+                account.groups.resetDetails.refreshing = false
             }
             // Identity continuity does not make a newly rotated access token the rejected credential.
             for job in attempts[account.id, default: [:]].keys {
