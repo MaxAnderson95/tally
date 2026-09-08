@@ -136,6 +136,18 @@ public actor TallyOwner {
         catch { accounts = previous; cacheAccounts(); throw error }
     }
 
+    public func setIdentityColor(accountID: String, index: Int) throws {
+        guard (0..<6).contains(index) else { throw Fault("invalid_request", "Choose one of the six Account colors.") }
+        guard let position = accounts.firstIndex(where: { $0.id == accountID }) else {
+            throw Fault("account_not_found", "Account not found.")
+        }
+        let previous = accounts[position].identityColorIndex
+        accounts[position].identityColorIndex = index
+        cacheAccounts()
+        do { try store.save(); storageError = nil }
+        catch { accounts[position].identityColorIndex = previous; cacheAccounts(); throw error }
+    }
+
     public func identityEvidence(accountID: String) throws -> IdentityEvidence {
         guard inventory.error == nil, let evidence = credentials[accountID]?.evidence else {
             throw Fault("inventory_unavailable", "Current Account identity is unavailable.")

@@ -87,7 +87,8 @@ func fixture(_ name: String) throws -> Data {
     }
     for dark in [false, true] {
         let suffix = dark ? "dark" : "light"
-        try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
+        try capture(Dashboard(runtime: runtime, showSettings: {}), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
+        try capture(TallySettings(runtime: runtime), width: 520, height: 560, name: "settings-\(suffix)", dark: dark)
         try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 640, name: "native-activity-\(suffix)", dark: dark)
         let previousActivity = runtime.activity
         runtime.activity?.activity.data = try Wire.decoder().decode(ActivityData.self, from: fixture("activity-pricing"))
@@ -102,7 +103,8 @@ func fixture(_ name: String) throws -> Data {
         try capture(AccountDetails(account: snapshot.accounts[0]).padding(12), width: 336, height: 1800, name: "native-details-\(suffix)", dark: dark)
         let resetAccount = snapshot.accounts[1]
         let credit = try #require(resetAccount.groups.resetDetails.data?.credits.first)
-        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true, confirming: credit.id).padding(12), width: 360, height: 1400, name: "native-reset-confirm-\(suffix)", dark: dark)
+        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true).padding(12), width: 336, height: 600, name: "native-reset-list-\(suffix)", dark: dark)
+        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true, confirming: credit.id).padding(12), width: 336, height: 700, name: "native-reset-confirm-\(suffix)", dark: dark)
         var operation = try Wire.decoder().decode([Redemption].self, from: fixture("redemptions"))[1]
         operation.accountId = resetAccount.id; operation.accountName = resetAccount.name
         runtime.resetOperations[resetAccount.id] = operation
@@ -113,12 +115,12 @@ func fixture(_ name: String) throws -> Data {
     }
     for index in snapshot.accounts.indices { snapshot.accounts[index].pinned = false; snapshot.accounts[index].pinOrder = nil }
     runtime.snapshot = snapshot
-    try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-unpinned", dark: false)
+    try capture(Dashboard(runtime: runtime, showSettings: {}), width: 360, height: 650, name: "native-unpinned", dark: false)
     let fallback = NSHostingView(rootView: MenuPins(runtime: runtime))
     #expect(fallback.fittingSize.width < 50)
     snapshot.accounts = []
     runtime.snapshot = snapshot
-    try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-empty", dark: true)
+    try capture(Dashboard(runtime: runtime, showSettings: {}), width: 360, height: 650, name: "native-empty", dark: true)
 }
 
 @Test func cardsAndPinsSelectDistinctDurationsWithoutHidingUnknowns() async throws {
@@ -637,6 +639,9 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(first.accounts.map(\.pinOrder) == Array(0..<8).map(Optional.some))
     let pins = [first.accounts[4].id, first.accounts[0].id]
     try await owner.setPins(pins)
+    try await owner.setIdentityColor(accountID: first.accounts[0].id, index: 4)
+    await #expect(throws: Fault.self) { try await owner.setIdentityColor(accountID: first.accounts[0].id, index: 6) }
+    await #expect(throws: Fault.self) { try await owner.setIdentityColor(accountID: "missing", index: 0) }
     var renamed = entries
     renamed[0].name = "VERBATIM Renamed"
     scenario.set(renamed + [StoredCredential(storedID: "new", name: "Later", key: "new-secret")])
@@ -675,7 +680,7 @@ private final class InventoryScenario: @unchecked Sendable {
     try await restarted.refresh(accountIDs: [])
     let restored = try await restarted.account(id: first.accounts[0].id).account
     #expect(!restored.pinned && restored.pinOrder == nil)
-    #expect(restored.identityColorIndex == 0)
+    #expect(restored.identityColorIndex == 4)
     #expect(restored.groups.quotas.data == nil)
     let saved = try String(contentsOf: storage, encoding: .utf8)
     #expect(!saved.contains("secret-0") && !saved.contains("row-0"))
@@ -796,6 +801,9 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await owner.settingsError()?.code == "settings_storage_unavailable")
     await #expect(throws: Fault.self) { try await owner.setPins([]) }
     #expect(await owner.snapshot().accounts.first?.pinned == true)
+    let account = try #require(await owner.snapshot().accounts.first)
+    await #expect(throws: Fault.self) { try await owner.setIdentityColor(accountID: account.id, index: 3) }
+    #expect(await owner.snapshot().accounts.first?.identityColorIndex == account.identityColorIndex)
     try FileManager.default.removeItem(at: file)
     try await owner.refresh(accountIDs: [])
     #expect(await owner.settingsError() == nil)

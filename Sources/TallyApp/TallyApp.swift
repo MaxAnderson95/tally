@@ -12,7 +12,6 @@ final class Runtime: ObservableObject {
     @Published var activityRange = ActivityRange.today
     @Published var listenerError: String?
     @Published var refreshError: String?
-    @Published var refreshSchedule: RefreshResponse?
     @Published var databasePath: String
     @Published var port: String
     @Published var webOrigin: String
@@ -88,7 +87,7 @@ final class Runtime: ObservableObject {
     }
 
     func refresh() async {
-        do { refreshSchedule = try await owner.refresh(); refreshError = nil }
+        do { _ = try await owner.refresh(); refreshError = nil }
         catch let fault as Fault { refreshError = fault.message }
         catch { refreshError = "Refresh could not be scheduled." }
         snapshot = await owner.snapshot()
@@ -183,6 +182,13 @@ final class Runtime: ObservableObject {
         snapshot = await owner.snapshot()
     }
 
+    func setIdentityColor(_ account: Account, index: Int) async {
+        do { try await owner.setIdentityColor(accountID: account.id, index: index); settingsError = nil }
+        catch let fault as Fault { settingsError = fault.message }
+        catch { settingsError = "Cannot save Account color." }
+        snapshot = await owner.snapshot()
+    }
+
     func stop() async {
         stopping = true
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
@@ -194,7 +200,7 @@ final class Runtime: ObservableObject {
 
 struct Dashboard: View {
     @ObservedObject var runtime: Runtime
-    @State private var settings = false
+    let showSettings: () -> Void
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         ScrollView {
@@ -202,20 +208,17 @@ struct Dashboard: View {
                 HStack {
                     Text("Tally").font(.title2.bold())
                     Spacer()
+                    if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
+                        Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     Button("Refresh") { Task { await runtime.refresh() } }
                 }
-                if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
-                    Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
-                } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary) }
                 if let error = runtime.listenerError {
                     Text(error).font(.caption)
                     Button("Retry web/API") { runtime.startServer() }
                 }
                 if let error = runtime.refreshError { Text(error).font(.caption) }
-                if let result = runtime.refreshSchedule {
-                    Text("Refresh: \(result.accounts.map { $0.schedule.state }.joined(separator: ", ")). Activity: \(result.activity.state).")
-                        .font(.caption).accessibilityLabel("Refresh scheduling result")
-                }
+                if let error = runtime.settingsError { Text(error).font(.caption) }
                 if let error = runtime.snapshot?.status.inventory.error { Text(error.message).font(.caption) }
                 if runtime.snapshot?.accounts.isEmpty != false {
                     Text("No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Settings.")
@@ -238,39 +241,12 @@ struct Dashboard: View {
                 RecordedActivity(runtime: runtime)
                 Divider()
                 HStack {
-                    Button("Settings") { settings.toggle() }
+                    Button("Settings", action: showSettings)
                     Spacer()
                     Button("Quit Tally") { NSApplication.shared.terminate(nil) }
                 }
-                if settings {
-                    Toggle("Launch at login", isOn: Binding(get: { runtime.loginEnabled }, set: { runtime.setLaunchAtLogin($0) }))
-                        .onAppear { runtime.readLoginStatus() }
-                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in runtime.readLoginStatus() }
-                    if let message = runtime.loginMessage {
-                        Text(message).font(.caption)
-                        Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
-                    }
-                    TextField("OpenCode database path", text: $runtime.databasePath)
-                    Text("Manage Account names and authentication in OpenCode.").font(.caption)
-                    if let error = runtime.settingsError { Text(error).font(.caption) }
-                    if let error = runtime.storageError { Text(error).font(.caption) }
-                    ForEach(runtime.snapshot?.accounts ?? []) { account in
-                        HStack {
-                            Button(account.pinned ? "Unpin" : "Pin") { Task { await runtime.pin(account) } }
-                            Text(account.name)
-                            Spacer()
-                            if account.pinned {
-                                Button("↑") { Task { await runtime.pin(account, move: -1) } }.accessibilityLabel("Move \(account.name) earlier")
-                                Button("↓") { Task { await runtime.pin(account, move: 1) } }.accessibilityLabel("Move \(account.name) later")
-                            }
-                        }
-                    }
-                    TextField("Loopback port", text: $runtime.port)
-                    TextField("Allowed HTTPS web origin (optional)", text: $runtime.webOrigin)
-                    Button("Save settings and restart listener") { Task { await runtime.saveSettings() } }
-                }
             }.padding(12)
-        }.frame(width: 360).frame(maxHeight: 650).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
+        }.frame(width: 360).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
     }
 }
 
@@ -279,22 +255,48 @@ struct AccountCard: View {
     @ObservedObject var runtime: Runtime
     @State private var details = false
     @State var resetExplanation = false
+    @State private var choosingColor = false
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                ProviderLogo(provider: account.provider, color: account.identityColorIndex)
-                VStack(alignment: .leading) {
+                Button { choosingColor.toggle() } label: {
+                    ProviderLogo(provider: account.provider, color: account.identityColorIndex)
+                }.buttonStyle(.plain)
+                    .accessibilityLabel("Change icon color for \(account.name)")
+                    .popover(isPresented: $choosingColor) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Icon color").font(.headline)
+                            HStack(spacing: 8) {
+                                ForEach(ProviderArtwork.light.indices, id: \.self) { index in
+                                    Button {
+                                        Task { await runtime.setIdentityColor(account, index: index) }
+                                        choosingColor = false
+                                    } label: {
+                                        ProviderLogo(provider: account.provider, color: index, size: 22)
+                                            .padding(6)
+                                            .background(account.identityColorIndex == index ? Color.primary.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                                    }.buttonStyle(.plain)
+                                        .accessibilityLabel(["Monochrome", "Blue", "Orange", "Green", "Purple", "Pink"][index])
+                                        .accessibilityAddTraits(account.identityColorIndex == index ? .isSelected : [])
+                                }
+                            }
+                        }.padding(12)
+                    }
+                HStack(alignment: .firstTextBaseline) {
                     Text(account.name).font(.headline)
                     Text(account.groups.plan.data?.name ?? "Plan unknown").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if account.groups.quotas.stale || account.groups.quotas.data?.windows.contains(where: { $0.stale }) == true {
-                    Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stale reading")
+                    Image(systemName: "exclamationmark.triangle")
+                        .help(quotaWarning)
+                        .accessibilityLabel(quotaWarning)
                 }
                 if account.command.acknowledgementRequired || runtime.resetOperations[account.id]?.acknowledgementRequired == true {
                     Button { resetExplanation.toggle() } label: { Image(systemName: "exclamationmark.triangle") }
                         .accessibilityLabel("Unknown reset outcome for \(account.name)")
+                        .help("The reset outcome is unknown. Click to review and acknowledge it before using another credit.")
                 }
                 Button { details.toggle() } label: { Image(systemName: details ? "chevron.up" : "chevron.down") }
                     .buttonStyle(.plain).accessibilityLabel("Details for \(account.name)")
@@ -325,7 +327,9 @@ struct AccountCard: View {
                             Text(percent(window.remainingPercent)).font(.system(size: 30, weight: .semibold))
                             Text("\(window.label) remaining").font(.caption)
                             Spacer(minLength: 0)
-                            Text(timing(window)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                            if let timing = timing(window) {
+                                Text(timing).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                            }
                         } else {
                             Text(window.label).font(.subheadline)
                             Spacer()
@@ -344,7 +348,9 @@ struct AccountCard: View {
                             }
                         }
                         .accessibilityLabel("\(percent(window.remainingPercent)) remaining")
-                    if !(index == 0 && window.durationSeconds != nil) { Text(timing(window)).font(.caption).foregroundStyle(.secondary) }
+                    if !(index == 0 && window.durationSeconds != nil), let timing = timing(window) {
+                        Text(timing).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             if account.provider == "anthropic" || account.provider == "xai" {
@@ -377,6 +383,18 @@ struct AccountCard: View {
             }
         }.padding(12).background(scheme == .dark ? Color(red: 44/255, green: 44/255, blue: 46/255) : .white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.2)))
     }
+    private var quotaWarning: String {
+        let quotas = account.groups.quotas
+        var reasons: [String] = []
+        if let error = quotas.error ?? runtime.snapshot?.status.inventory.error { reasons.append(error.message) }
+        if quotas.stale {
+            reasons.append(quotas.observedAt.map { "Showing an older reading from \($0.formatted(date: .abbreviated, time: .standard))." } ?? "No successful quota reading yet.")
+        }
+        for window in quotas.data?.windows ?? [] where window.resetState == "passed" {
+            reasons.append("\(window.label): reset time passed; awaiting an updated reading.")
+        }
+        return reasons.joined(separator: "\n")
+    }
     private func percent(_ number: Double?) -> String { number.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "?" }
     private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
     private func extraLabel(_ extra: ExtraUsage?) -> String {
@@ -387,12 +405,21 @@ struct AccountCard: View {
         default: "Unavailable"
         }
     }
-    private func timing(_ window: QuotaWindow) -> String {
+    private func timing(_ window: QuotaWindow) -> String? {
+        guard let reset = window.resetAt else { return nil }
         let duration = window.durationSeconds == nil ? "Duration unknown. " : ""
-        if window.resetState == "not_started" { return "Not started" }
         if window.resetState == "passed" { return duration + "Reset time passed; awaiting update" }
-        guard let reset = window.resetAt else { return duration + "Reset time unavailable" }
-        return duration + "Resets \(reset.formatted(.relative(presentation: .named)))"
+        let remaining = reset.timeIntervalSinceNow
+        guard remaining > 0 else { return duration + "Reset time passed; awaiting update" }
+        let minutes = Int(ceil(remaining / 60))
+        let hours = minutes / 60
+        if minutes >= 1440 {
+            let days = minutes / 1440
+            let remainingHours = hours % 24
+            return duration + "Resets in \(days)d \(remainingHours)h"
+        }
+        let remainingMinutes = minutes % 60
+        return duration + "Resets in \(hours)h \(remainingMinutes)m"
     }
 }
 
@@ -403,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private var pins: NSHostingView<MenuPins>!
     private var subscription: AnyCancellable?
+    private var settingsWindow: NSWindow?
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         pins = NSHostingView(rootView: MenuPins(runtime: runtime))
@@ -414,9 +442,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         item.button?.target = self; item.button?.action = #selector(togglePopover)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: Dashboard(runtime: runtime))
+        popover.animates = false
+        popover.contentViewController = NSHostingController(rootView: Dashboard(runtime: runtime, showSettings: { [weak self] in self?.showSettings() }))
         runtime.start()
     }
+    private func showSettings() {
+        popover.performClose(nil)
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.title = "Tally Settings"
+            window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 420, height: 360)
+            window.contentViewController = NSHostingController(rootView: TallySettings(runtime: runtime))
+            window.center()
+            settingsWindow = window
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
     private func layoutPins() {
         let size = pins.fittingSize
         item.length = size.width
@@ -424,7 +469,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func togglePopover() {
         if popover.isShown { popover.performClose(nil) }
-        else if let button = item.button { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+        else if let button = item.button {
+            if let screen = button.window?.screen ?? NSScreen.main {
+                popover.contentSize = NSSize(width: 360, height: screen.frame.height * 2 / 3)
+            }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+        }
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        popover.performClose(nil)
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task { await runtime.stop(); sender.reply(toApplicationShouldTerminate: true) }

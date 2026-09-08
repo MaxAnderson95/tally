@@ -38,7 +38,7 @@ struct MenuPins: View {
             if pins.isEmpty { Image(systemName: "chart.bar").padding(.horizontal, 4).accessibilityLabel("Tally") }
             ForEach(pins) { account in
                 HStack(spacing: 3) {
-                    ProviderLogo(provider: account.provider, color: account.identityColorIndex, size: 15)
+                    ProviderLogo(provider: account.provider, color: account.identityColorIndex, size: 18)
                     VStack(alignment: .leading, spacing: 0) {
                         if account.pin.lines.isEmpty {
                             HStack(spacing: 1) {

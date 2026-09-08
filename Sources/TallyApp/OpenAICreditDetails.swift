@@ -25,48 +25,75 @@ struct OpenAICreditDetails: View {
             }
             if groups.balances.stale { Text("Purchased credits stale").font(.caption) }
             Button { expanded.toggle() } label: {
-                Text((groups.resetSummary.data?.availableCount.map { "\($0) reset credits" } ?? "Reset count unavailable") + (groups.resetSummary.stale ? " (stale)" : ""))
-                    .font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
-                    .overlay(Capsule().stroke(.secondary.opacity(0.2)))
+                HStack(spacing: 5) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .semibold))
+                    Text((groups.resetSummary.data?.availableCount.map { "\($0) reset credits" } ?? "Reset count unavailable") + (groups.resetSummary.stale ? " (stale)" : ""))
+                }.padding(.vertical, 4)
             }.buttonStyle(.plain)
-                .onHover { hovering in if hovering { expanded = true } }
                 .accessibilityLabel("Reset credit details for \(account.name)")
             if expanded {
-                Text("Reset credits for \(account.name)").font(.headline)
-                Text("Redeeming consumes one credit; the provider decides which windows reset.")
-                DetailRows(rows: [("Available", groups.resetSummary.data?.availableCount.map(String.init) ?? "Unavailable"),
-                                  ("Provider-applicable", groups.resetSummary.data?.applicableAvailableCount.map(String.init) ?? "Not reported"),
-                                  ("Count source", groups.resetSummary.data?.source ?? "Unavailable"),
-                                  ("Mac timezone", TimeZone.current.identifier)]
-                           + groupDetailRows("Count", groups.resetSummary) + groupDetailRows("Credit list", groups.resetDetails))
-                Text("Dollar comparisons use a reference rate of USD 0.04 per purchased credit, not provider-reported cash.")
                 if let details = groups.resetDetails.data {
                     if details.credits.isEmpty { Text("No reset credits reported") }
                     ForEach(details.credits) { credit in
-                        Text(credit.title ?? "Reset credit").font(.headline)
-                        DetailRows(rows: [("Credit ID", credit.id), ("Type", credit.type ?? "Unknown"),
-                                          ("Status", credit.status ?? "Unknown"), ("Available", credit.available.map { $0 ? "Yes" : "No" } ?? "Unknown"),
-                                          ("Granted", credit.grantedAt?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable"),
-                                          ("Expiry", credit.expiry.kind == "none" ? "Does not expire" : credit.expiry.at?.formatted(date: .abbreviated, time: .standard) ?? "Expiry unknown"),
-                                           ("Description", credit.description ?? "Unavailable")])
-                        let operation = runtime.resetOperations[account.id]
-                        Button(blocked && (operation == nil ? chosen : operation?.selectedCreditId ?? operation?.requestedCreditId) == credit.id && operation?.acknowledgementRequired != true ? "Redeeming…" : "Use") { confirming = credit.id }
-                            .disabled(blocked || !credit.isUsable)
-                        if confirming == credit.id && !blocked {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Use this credit on \(account.name)? This consumes one credit and cannot be undone.")
-                                HStack {
-                                    Spacer()
-                                    Button("Cancel") { confirming = nil }
-                                    Button("Use credit") {
-                                        confirming = nil; chosen = credit.id
-                                        Task { await runtime.redeem(account, credit: credit) }
-                                    }.disabled(!credit.isUsable)
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(credit.title ?? "Reset credit").font(.subheadline.weight(.medium))
+                                    Text(credit.expiry.kind == "none" ? "No expiry" : credit.expiry.at.map { "Expires \($0.formatted(date: .abbreviated, time: .omitted))" } ?? "Expiry unknown")
+                                        .foregroundStyle(.secondary)
+                                    if !credit.isUsable { Text("Unavailable").foregroundStyle(.secondary) }
                                 }
-                            }.padding(10).overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary))
-                        }
+                                Spacer(minLength: 0)
+                                let operation = runtime.resetOperations[account.id]
+                                if confirming != credit.id || blocked {
+                                    Button(blocked && (operation == nil ? chosen : operation?.selectedCreditId ?? operation?.requestedCreditId) == credit.id && operation?.acknowledgementRequired != true ? "Redeeming…" : "Use credit") { confirming = credit.id }
+                                        .controlSize(.small)
+                                        .disabled(blocked || !credit.isUsable)
+                                }
+                            }
+                            if confirming == credit.id && !blocked {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Use one credit on \(account.name)? This cannot be undone. OpenAI decides which windows reset.")
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    HStack {
+                                        Spacer()
+                                        Button("Cancel") { confirming = nil }
+                                        Button("Use credit") {
+                                            confirming = nil; chosen = credit.id
+                                            Task { await runtime.redeem(account, credit: credit) }
+                                        }.disabled(!credit.isUsable)
+                                    }.controlSize(.small)
+                                }
+                                .padding(10)
+                                .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            DisclosureGroup("Details") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if let description = credit.description { Text(description) }
+                                    DetailRows(rows: [("Type", credit.type ?? "Unknown"),
+                                                      ("Status", credit.status ?? "Unknown"),
+                                                      ("Available", credit.available.map { $0 ? "Yes" : "No" } ?? "Unknown"),
+                                                      ("Granted", credit.grantedAt?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable"),
+                                                      ("Expiry", credit.expiry.kind == "none" ? "Does not expire" : credit.expiry.at?.formatted(date: .abbreviated, time: .standard) ?? "Expiry unknown")])
+                                    Text("Credit ID").foregroundStyle(.secondary)
+                                    Text(credit.id).textSelection(.enabled)
+                                }.padding(.top, 6)
+                            }.foregroundStyle(.secondary)
+                        }.padding(.vertical, 4)
                     }
                 } else { Text("Credit list unavailable") }
+                Divider()
+                DisclosureGroup("Collection details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        DetailRows(rows: [("Available", groups.resetSummary.data?.availableCount.map(String.init) ?? "Unavailable"),
+                                          ("Provider-applicable", groups.resetSummary.data?.applicableAvailableCount.map(String.init) ?? "Not reported"),
+                                          ("Count source", groups.resetSummary.data?.source ?? "Unavailable"),
+                                          ("Mac timezone", TimeZone.current.identifier)]
+                                   + groupDetailRows("Count", groups.resetSummary) + groupDetailRows("Credit list", groups.resetDetails))
+                        Text("Dollar comparisons use a reference rate of USD 0.04 per purchased credit, not provider-reported cash.")
+                    }.padding(.top, 6)
+                }.foregroundStyle(.secondary)
             }
         }.font(.caption)
     }
