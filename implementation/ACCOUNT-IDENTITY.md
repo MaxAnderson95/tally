@@ -12,17 +12,19 @@ The shared owner reconciles complete subscription inventory before scheduling co
 - Proven duplicates choose creation time then credential ID. Initial assignment sorts by provider, lowercased name, original name, then stored credential ID. IDs are random opaque UUIDs persisted with the association. Later display ties use opaque Account ID; pins retain their saved order.
 - Successful removal clears readings/pins, retaining identity/color association. A recognized return keeps its ID/color and starts unpinned. Failed inventory reads keep last-known inventory and stale groups. Database switching cancels old collection and prevents its completion from updating the new namespace. Returning restores readings stale.
 
+Anthropic and xAI Accounts therefore do not preserve ID, pins, or readings across a refresh that rotates both tokens, even when OpenCode updates the same credential row. Tally cannot distinguish that rotation from replacement using the retained evidence.
+
 `TallyOwner.identityEvidence(accountID:)` gives later command recovery a Codable, nonsecret target comparison. `same` proves a match across namespaces; `different` requires a different provider or different known OpenAI workspace; `uncertain` must not release an unresolved command block. The command layer must retain original namespace/Account/operation identities and evidence durably, refresh inventory before targeting, and refuse uncertainty until resolved by its command policy. REST never includes this evidence. Reading or acknowledging an old command must not depend on the Account still being in inventory.
 
 The activity layer (#21) must use the owner's current inventory namespace, clear its displayed view on namespace departure, and validate activity-specific schema separately. The provider collectors (#17-19) must keep using selected stored credentials rather than active connections. The presentation layer (#20) consumes persisted `pinned`, `pinOrder`, and `identityColorIndex`; the complete logo/pin renderer and exact visual palette remain in that layer.
 
 ## Source evidence
 
-Verified September 7, 2026 against OpenCode V2 `cd9d06c1ca0d5098178c0d4b929aa8a7fde8c69b`: `packages/schema/src/credential.ts`, `packages/core/src/plugin/provider/openai.ts` (workspace extraction and refresh), and `packages/core/src/plugin/provider/xai.ts` (device authentication, browser migration, refresh metadata). xAI stores no stable user identifier in this path. Anthropic's core plugin has no subscription connector; Max's `opencode-claude-auth` revision `5d7f9f70aeeba761255cb64cebee0be102dbe363`, `src/oauth.ts`, defines `claude-subscription` and preserves metadata during refresh but adds no stable account identifier. Evidence comes from source inspection, not new live provider calls.
+Verified September 7, 2026 against OpenCode V2 `cd9d06c1ca0d5098178c0d4b929aa8a7fde8c69b`: `packages/schema/src/credential.ts`, `packages/core/src/plugin/provider/openai.ts` (workspace extraction and refresh), and `packages/core/src/plugin/provider/xai.ts` (device authentication, browser migration, refresh metadata). xAI stores no stable user identifier in this path. Anthropic's core plugin has no subscription connector; Max's `opencode-claude-auth` revision `faf12ff41fda501001812f5155293716e7b2c946`, `src/oauth.ts`, defines `claude-subscription` and preserves metadata during refresh but adds no stable account identifier. Evidence comes from source inspection, not new live provider calls.
 
 https://github.com/anomalyco/opencode/tree/cd9d06c1ca0d5098178c0d4b929aa8a7fde8c69b/packages/core/src/plugin/provider
 
-https://github.com/MaxAnderson95/opencode-claude-auth/blob/5d7f9f70aeeba761255cb64cebee0be102dbe363/src/oauth.ts
+https://github.com/MaxAnderson95/opencode-claude-auth/blob/faf12ff41fda501001812f5155293716e7b2c946/src/oauth.ts
 
 ## Verification on September 7, 2026
 

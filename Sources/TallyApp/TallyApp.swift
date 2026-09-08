@@ -12,6 +12,7 @@ final class Runtime: ObservableObject {
     @Published var port: String
     @Published var webOrigin: String
     @Published var settingsError: String?
+    @Published var storageError: String?
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -38,7 +39,7 @@ final class Runtime: ObservableObject {
         displayTask = Task {
             while !Task.isCancelled {
                 snapshot = await owner.snapshot()
-                if let error = await owner.settingsError() { settingsError = error.message }
+                storageError = await owner.settingsError()?.message
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
@@ -141,6 +142,7 @@ struct Dashboard: View {
                     TextField("OpenCode database path", text: $runtime.databasePath)
                     Text("Manage Account names and authentication in OpenCode.").font(.caption)
                     if let error = runtime.settingsError { Text(error).font(.caption) }
+                    if let error = runtime.storageError { Text(error).font(.caption) }
                     ForEach(runtime.snapshot?.accounts ?? []) { account in
                         HStack {
                             Button(account.pinned ? "Unpin" : "Pin") { Task { await runtime.pin(account) } }

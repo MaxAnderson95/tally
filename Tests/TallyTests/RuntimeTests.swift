@@ -329,12 +329,24 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await owner.settingsError()?.code == "settings_storage_unavailable")
     await #expect(throws: Fault.self) { try await owner.setPins([]) }
     #expect(await owner.snapshot().accounts.first?.pinned == true)
+    try FileManager.default.removeItem(at: file)
+    try await owner.refresh(accountIDs: [])
+    #expect(await owner.settingsError() == nil)
 }
 
 @Test func inventoryRescanPreservesInFlightReadingState() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let path = directory.appendingPathComponent("opencode.db").path
+    var db: OpaquePointer?
+    #expect(sqlite3_open(path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER); INSERT INTO credential VALUES ('row', 'Go', '{\"type\":\"key\",\"key\":\"secret\"}', 'opencode-go', 1);", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+    let source = OpenCodeInventory(path: path)
     let (observations, continuation) = AsyncStream<GoObservation>.makeStream()
     let owner = TallyOwner(clock: { Date() }, inventory: {
-        InventoryRead(databaseIdentity: "db", credentials: [StoredCredential(storedID: "row", name: "Go", key: "secret")])
+        try source.read()
     }, collect: { _ in
         for await observation in observations { return observation }
         throw Fault("unexpected", "Missing synthetic observation.")
@@ -342,6 +354,7 @@ private final class InventoryScenario: @unchecked Sendable {
     try await owner.refresh()
     let first = await owner.snapshot().accounts[0].groups.quotas
     #expect(first.refreshing)
+    try await owner.setDatabasePath(path)
     #expect(try await owner.refresh().accounts[0].schedule.state == "joined")
     let joined = await owner.snapshot().accounts[0].groups.quotas
     #expect(joined.refreshing)
@@ -350,4 +363,8 @@ private final class InventoryScenario: @unchecked Sendable {
     continuation.finish()
     await owner.waitForCollection()
     #expect(await owner.snapshot().accounts[0].groups.quotas.data != nil)
+    let alias = directory.appendingPathComponent("alias.db").path
+    try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: path)
+    try await owner.setDatabasePath(alias)
+    #expect(await owner.snapshot().accounts[0].groups.quotas.stale == false)
 }

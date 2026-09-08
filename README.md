@@ -34,6 +34,8 @@ Database discovery follows OpenCode V2: `OPENCODE_DB` if absolute, otherwise `<X
 
 Account IDs, per-database preferences, provider-local color sequences, and last-good readings live in `~/Library/Application Support/Tally/accounts.json`. This file contains token/workspace fingerprints, never raw credentials or workspace IDs. Database identity uses filesystem volume/device, file number, and creation time, so symlink aliases and renames preserve the namespace while a replaced file starts a new namespace. Returning to a recognized database restores its preferences. Successful Account removal clears its pins and readings, retaining its identity color for a recognized return. First nonempty discovery pins the batch; later discoveries start unpinned. Failed or empty discovery does not finish initial setup.
 
+Anthropic and xAI Accounts lose their ID, pins, and cached readings when OpenCode refresh rotates both the access and refresh tokens. An unchanged token proves continuity; the same credential row alone does not. OpenAI Accounts with a known workspace selector preserve identity through token rotation. See [Account identity rules](implementation/ACCOUNT-IDENTITY.md).
+
 ## Checks
 
 ```sh

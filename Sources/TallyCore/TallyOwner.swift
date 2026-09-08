@@ -72,7 +72,7 @@ public actor TallyOwner {
         let source = OpenCodeInventory(path: path)
         inventorySource = { try source.read() }
         identifySource = { try source.databaseIdentity() }
-        leaveNamespace()
+        if (try? source.databaseIdentity()) != databaseIdentity { leaveNamespace() }
         try refresh(accountIDs: [])
     }
 
