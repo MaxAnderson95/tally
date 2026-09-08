@@ -10,6 +10,7 @@ final class Runtime: ObservableObject {
     @Published var snapshot: AccountsResponse?
     @Published var activity: ActivityResponse?
     @Published var activityRange = ActivityRange.today
+    @Published var dashboardScrollPosition = ScrollPosition(edge: .top)
     @Published var listenerError: String?
     @Published var refreshError: String?
     @Published var databasePath: String
@@ -229,7 +230,6 @@ struct Dashboard: View {
                     ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account, runtime: runtime) }
                 }
                 if accounts.contains(where: { !$0.pinned }) {
-                    Text("Other accounts").font(.caption).foregroundStyle(.secondary)
                     ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
                         let others = accounts.filter { !$0.pinned && $0.provider == provider }
                         if !others.isEmpty {
@@ -246,7 +246,8 @@ struct Dashboard: View {
                     Button("Quit Tally") { NSApplication.shared.terminate(nil) }
                 }
             }.padding(12)
-        }.frame(width: 360).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
+        }.scrollPosition($runtime.dashboardScrollPosition)
+            .frame(width: 360).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
     }
 }
 
@@ -426,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown { popover.performClose(nil) }
         else if let button = item.button {
             if let screen = button.window?.screen ?? NSScreen.main {
-                popover.contentSize = NSSize(width: 360, height: screen.frame.height * 2 / 3)
+                popover.contentSize = NSSize(width: 360, height: screen.frame.height * 0.8)
             }
             NSApplication.shared.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -437,6 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.performClose(nil)
     }
     func popoverDidShow(_ notification: Notification) {
+        runtime.dashboardScrollPosition.scrollTo(edge: .top)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             self?.popover.close()
         }
