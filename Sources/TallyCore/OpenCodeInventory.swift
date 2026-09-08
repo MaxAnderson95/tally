@@ -51,7 +51,7 @@ public struct OpenCodeInventory: Sendable {
             catch { throw Fault("inventory_schema_incompatible", "An OpenCode Go credential cannot be decoded.") }
             guard value.type == "key" else { continue }
             guard let key = value.key, !key.isEmpty, !key.contains(where: { $0.isWhitespace }) else {
-                throw Fault("credentials_unavailable", "An OpenCode Go key is invalid. Manage this Account in OpenCode.")
+                continue
             }
             if keys.insert(key).inserted {
                 credentials.append(GoCredential(storedID: try text(0), name: try text(1), key: key))

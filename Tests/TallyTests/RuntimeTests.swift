@@ -46,6 +46,9 @@ func fixture(_ name: String) throws -> Data {
     INSERT INTO credential VALUES ('b', 'opencode-go', 'WORK', '{"type":"key","key":"key-b"}', 1, 2, NULL);
     INSERT INTO credential VALUES ('c', 'opencode-go', 'Duplicate', '{"type":"key","key":"key-a"}', 1, 3, NULL);
     INSERT INTO credential VALUES ('d', 'opencode-go', 'Unsupported', '{"type":"oauth"}', 0, 4, NULL);
+    INSERT INTO credential VALUES ('e', 'opencode-go', 'Whitespace key', '{"type":"key","key":"bad key"}', 0, 5, NULL);
+    INSERT INTO credential VALUES ('f', 'opencode-go', 'Empty key', '{"type":"key","key":""}', 0, 6, NULL);
+    INSERT INTO credential VALUES ('g', 'opencode-go', 'Missing key', '{"type":"key"}', 0, 7, NULL);
     """
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)

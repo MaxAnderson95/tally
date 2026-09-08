@@ -12,7 +12,7 @@ public struct HTTPPolicy: Sendable {
         allowedOrigins = ["http://127.0.0.1:\(port)", "http://localhost:\(port)"]
         if let webOrigin, let url = URL(string: webOrigin), let host = url.host {
             allowedHosts.insert(host.lowercased() + (url.port.map { ":\($0)" } ?? ""))
-            allowedOrigins.insert(webOrigin)
+            allowedOrigins.insert(webOrigin.lowercased())
         }
     }
 }

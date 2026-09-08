@@ -15,7 +15,8 @@ public actor TallyOwner {
     public init(databasePath: String, appBuild: String) {
         let source = OpenCodeInventory(path: databasePath)
         inventorySource = { try source.read() }
-        collect = { try await GoUsage().collect(key: $0) }
+        let usage = GoUsage()
+        collect = { try await usage.collect(key: $0) }
         clock = { Date() }
         self.appBuild = appBuild
     }
