@@ -34,8 +34,9 @@ struct AnthropicUsage: Sendable {
         catch { throw Fault("provider_unavailable", "Anthropic could not be reached.") }
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "Anthropic returned no HTTP response.") }
         guard http.statusCode == 200 else {
-            var fault = Fault(http.statusCode == 401 ? "credentials_rejected" : "provider_unavailable",
-                              "Anthropic request failed (HTTP \(http.statusCode)). Check the Account in OpenCode.")
+            var fault = http.statusCode == 401
+                ? Fault("credentials_rejected", "Anthropic rejected this access token. Check the Account in OpenCode.")
+                : Fault("provider_unavailable", "Anthropic request failed (HTTP \(http.statusCode)).")
             fault.retryAt = GoUsage.retryAfter(http.value(forHTTPHeaderField: "Retry-After"), at: Date())
             throw fault
         }

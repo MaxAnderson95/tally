@@ -28,10 +28,11 @@ public actor TallyOwner {
         identifySource = { try source.databaseIdentity() }
         store = AccountIdentityStore(url: storageURL)
         let usage = GoUsage()
+        let anthropic = AnthropicUsage()
         collections = { credential in
             switch credential.provider {
             case "opencode-go": [.go { try await usage.collect(key: credential.key) }]
-            case "anthropic": [AnthropicUsage().job(access: credential.key), AnthropicUsage().planJob(access: credential.key)]
+            case "anthropic": [anthropic.job(access: credential.key), anthropic.planJob(access: credential.key)]
             default: []
             }
         }

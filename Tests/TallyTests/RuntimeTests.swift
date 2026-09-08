@@ -114,7 +114,7 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
         #expect(request.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1.69")
         let token = request.value(forHTTPHeaderField: "Authorization")
         if token == "Bearer network" { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
-        let status = token == "Bearer rejected" ? 401 : token == "Bearer cooldown" ? 429 : 200
+        let status = ["Bearer rejected": 401, "Bearer cooldown": 429, "Bearer server": 500, "Bearer overloaded": 529][token ?? ""] ?? 200
         let data: Data
         if token == "Bearer malformed" { data = Data("not json".utf8) }
         else if request.url == AnthropicUsage.profileEndpoint { data = Data(#"{"organization":{"organization_type":"claude_pro"}}"#.utf8) }
@@ -136,14 +136,17 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
     var groups = AccountGroups()
     for observation in try await collector.planJob(access: "valid").run() { observation.apply(to: &groups, at: Date()) }
     #expect(groups.plan.data?.name == "Pro")
-    for (token, code) in [("rejected", "credentials_rejected"), ("cooldown", "provider_unavailable"), ("malformed", "provider_response_invalid"), ("network", "provider_unavailable")] {
-        do {
-            _ = try await collector.collect(access: token)
-            Issue.record("Expected a sanitized provider failure.")
-        } catch let fault as Fault {
-            #expect(fault.code == code)
-            if token == "cooldown" { #expect(fault.retryAt?.timeIntervalSinceNow ?? 0 > 590) }
-            #expect(!fault.message.contains("Bearer"))
+    for (token, code) in [("rejected", "credentials_rejected"), ("cooldown", "provider_unavailable"), ("server", "provider_unavailable"), ("overloaded", "provider_unavailable"), ("malformed", "provider_response_invalid"), ("network", "provider_unavailable")] {
+        for job in [collector.job(access: token), collector.planJob(access: token)] {
+            do {
+                _ = try await job.run()
+                Issue.record("Expected a sanitized provider failure.")
+            } catch let fault as Fault {
+                #expect(fault.code == code)
+                #expect(fault.message.contains("Check the Account in OpenCode") == (token == "rejected"))
+                if token == "cooldown" { #expect(fault.retryAt?.timeIntervalSinceNow ?? 0 > 590) }
+                #expect(!fault.message.contains("Bearer"))
+            }
         }
     }
 }
