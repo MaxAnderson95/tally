@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { z } from 'zod'
 import { createTally, defaultBaseURL } from '../src/tally.ts'
-import { Input, Result, AccountsResponse, ActivityResponse, RefreshResponse } from '../src/contract.ts'
+import { Input, Command, Result, AccountsResponse, ActivityResponse, RefreshResponse } from '../src/contract.ts'
 import type { TallyInput } from '../src/contract.ts'
 import plugin from '../src/index.ts'
 
@@ -71,17 +71,19 @@ test('refresh verifies major first and preserves all scheduling states, omitted/
   })
 })
 
-test('input schema rejects invalid actions, IDs, ranges, nulls and unrelated action fields', () => {
+test('command schema rejects invalid actions, IDs, ranges, nulls and unrelated action fields', () => {
   for (const value of [null, {}, { action: 'redeem' }, { action: 'status', range: 'today' }, { action: 'accounts', accountId: '' }, { action: 'accounts', accountId: null }, { action: 'activity', range: 'week' }, { action: 'refresh', accountIds: null }, { action: 'refresh', accountIds: [3] }, { action: 'refresh', accountIds: [''] }]) {
-    assert.equal(Input.safeParse(value).success, false, JSON.stringify(value))
+    assert.equal(Command.safeParse(value).success, false, JSON.stringify(value))
   }
 })
 
 test('executor declines a malformed known action without making a request', async () => {
   await serve(async (baseURL, requests) => {
-    const result = await createTally({ baseURL }).execute({ action: 'accounts', accountId: '' })
-    assert.equal(result.output.ok, false)
-    if (!result.output.ok) assert.equal(result.output.error.code, 'invalid_request')
+    for (const input of [{ action: 'accounts', accountId: '' }, { action: 'status', range: 'today' }, { action: 'accounts', accountIds: [] }, { action: 'activity', accountId: 'one' }, { action: 'refresh', range: 'today' }] satisfies TallyInput[]) {
+      const result = await createTally({ baseURL }).execute(input)
+      assert.equal(result.output.ok, false)
+      if (!result.output.ok) assert.equal(result.output.error.code, 'invalid_request')
+    }
     assert.equal(requests.length, 0)
   })
 })
@@ -167,5 +169,9 @@ test('the output schema rejects success DTOs paired with the wrong action', () =
   }
   const schema = z.toJSONSchema(Result)
   assert(schema.anyOf && schema.anyOf.length === 5)
+  const inputSchema = z.toJSONSchema(createTally().input, { target: 'draft-2020-12', io: 'input' })
+  assert.equal(inputSchema.type, 'object')
+  for (const keyword of ['anyOf', 'oneOf', 'allOf']) assert.equal(keyword in inputSchema, false)
+  assert.deepEqual(Input.parse({ action: 'activity', range: 'today' }), { action: 'activity', range: 'today' })
   assert.equal(plugin.id, 'tally')
 })

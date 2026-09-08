@@ -1,6 +1,6 @@
 # Companion queries
 
-The independent `companion/` package registers one direct model tool named `tally`. Its action-discriminated input supports status, Account list/detail, activity ranges and refresh scheduling. Zod schemas define the concrete REST response types, runtime validation and action-matched output schema together. Loose response objects preserve additive v1 fields at every nesting level. Input objects reject unrelated fields.
+The independent `companion/` package registers one direct model tool named `tally`. Its model-facing input is a flat object supporting status, Account list/detail, activity ranges and refresh scheduling, compatible with Anthropic's object-root requirement. The executor validates action-specific field pairing with a discriminated command schema before any HTTP request. Zod schemas define the concrete REST response types, runtime validation and action-matched output schema together. Loose response objects preserve additive v1 fields at every nesting level. Commands reject unrelated fields.
 
 The companion defaults to `http://127.0.0.1:7483` and accepts a configured HTTP(S) origin for a different saved port or personal-tailnet proxy. It returns structured faults for unavailable transport, incompatible API major, invalid configuration and malformed responses. HTTP faults retain their code, retry time and blocking operation. Refresh verifies major 1 before sending its single scheduling POST; app and companion build numbers need not match. The app remains the only collector and state owner.
 

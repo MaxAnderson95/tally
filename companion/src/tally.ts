@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { Input, Result, Status, AccountsResponse, AccountResponse, ActivityResponse, RefreshResponse, Fault } from './contract.ts'
+import { Input, Command, Result, Status, AccountsResponse, AccountResponse, ActivityResponse, RefreshResponse, Fault } from './contract.ts'
 import type { TallyInput, TallyResult } from './contract.ts'
 
 export const defaultBaseURL = 'http://127.0.0.1:7483'
@@ -50,22 +50,23 @@ export function createTally(options: unknown = {}) {
   async function query(input: TallyInput): Promise<TallyResult> {
     try {
       if (!validBase) throw fault('invalid_configuration', 'Set baseURL to the Tally HTTP(S) origin, with no credentials, path, query, or fragment.')
-      const validated = Input.safeParse(input)
+      const validated = Command.safeParse(input)
       if (!validated.success) throw fault('invalid_request', 'Use status, accounts with optional accountId, activity with optional today/yesterday/last30days range, or refresh with optional accountIds. IDs must be nonempty strings; unrelated fields are not accepted.')
+      const command = validated.data
       // Refresh has no status envelope, so verify compatibility before scheduling any work.
-      if (input.action === 'status' || input.action === 'refresh') {
+      if (command.action === 'status' || command.action === 'refresh') {
         const current = status(await request('/status'))
-        if (input.action === 'status') return { ok: true, action: input.action, data: current }
-        return { ok: true, action: input.action, data: decode(RefreshResponse, await request('/refresh', input.accountIds === undefined ? {} : { accountIds: input.accountIds })) }
+        if (command.action === 'status') return { ok: true, action: command.action, data: current }
+        return { ok: true, action: command.action, data: decode(RefreshResponse, await request('/refresh', command.accountIds === undefined ? {} : { accountIds: command.accountIds })) }
       }
-      if (input.action === 'accounts') {
-        const data = await request(input.accountId === undefined ? '/accounts' : `/accounts/${encodeURIComponent(input.accountId)}`)
+      if (command.action === 'accounts') {
+        const data = await request(command.accountId === undefined ? '/accounts' : `/accounts/${encodeURIComponent(command.accountId)}`)
         status(decode(z.object({ status: z.unknown() }), data).status)
-        return { ok: true, action: input.action, data: input.accountId === undefined ? decode(AccountsResponse, data) : decode(AccountResponse, data) }
+        return { ok: true, action: command.action, data: command.accountId === undefined ? decode(AccountsResponse, data) : decode(AccountResponse, data) }
       }
-      const data = await request(`/activity${input.range === undefined ? '' : `?range=${input.range}`}`)
+      const data = await request(`/activity${command.range === undefined ? '' : `?range=${command.range}`}`)
       status(decode(z.object({ status: z.unknown() }), data).status)
-      return { ok: true, action: input.action, data: decode(ActivityResponse, data) }
+      return { ok: true, action: command.action, data: decode(ActivityResponse, data) }
     } catch (error) {
       const known = Fault.safeParse(error)
       return { ok: false, action: input.action, error: known.success ? known.data : fault('invalid_response', 'The Tally query failed without a compatible result.') }
@@ -74,7 +75,7 @@ export function createTally(options: unknown = {}) {
 
   return {
     name: 'tally',
-    description: 'Query Tally periodically while working to check remaining subscription usage, freshness, reset times and pacing. status checks the app; accounts lists all Accounts or reads an explicit opaque accountId; activity reads retained provider-level OpenCode activity (today by default); refresh schedules reads and returns started/joined/deferred/blocked state without waiting for collection. Null is unknown, not zero. Keep stale readings, partial history and pricing coverage visible. Inventory and activity belong to the Mac running Tally, regardless of this OpenCode instance. Activity and API-equivalent estimates are not measured quota consumption or subscription charges.',
+    description: 'Query Tally periodically while working to check remaining subscription usage, freshness, reset times and pacing. status checks the app and accepts no optional fields; accounts lists all Accounts or reads an optional opaque accountId; activity reads retained provider-level OpenCode activity with optional range (today by default); refresh schedules reads with optional accountIds and returns started/joined/deferred/blocked state without waiting for collection. Optional fields belong only to their named action. Null is unknown, not zero. Keep stale readings, partial history and pricing coverage visible. Inventory and activity belong to the Mac running Tally, regardless of this OpenCode instance. Activity and API-equivalent estimates are not measured quota consumption or subscription charges.',
     input: Input,
     output: Result,
     options: { codemode: false as const },

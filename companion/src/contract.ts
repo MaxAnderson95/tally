@@ -81,7 +81,12 @@ export const ActivityResponse = object({
 })
 
 const id = text.min(1)
-export const Input = z.discriminatedUnion('action', [
+// Anthropic requires an object root; action-specific field pairing is checked during execution.
+export const Input = z.strictObject({
+  action: z.enum(['status', 'accounts', 'activity', 'refresh']),
+  accountId: id.optional(), range: Range.optional(), accountIds: z.array(id).optional(),
+})
+export const Command = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('status') }),
   z.strictObject({ action: z.literal('accounts'), accountId: id.optional() }),
   z.strictObject({ action: z.literal('activity'), range: Range.optional() }),
