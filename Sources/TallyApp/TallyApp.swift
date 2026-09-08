@@ -306,6 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pins = NSHostingView(rootView: MenuPins(runtime: runtime))
         pins.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(togglePopover)))
         item.button?.addSubview(pins)
+        item.button?.setAccessibilityLabel("Tally")
         subscription = runtime.$snapshot.sink { [weak self] _ in
             Task { @MainActor in self?.layoutPins() }
         }

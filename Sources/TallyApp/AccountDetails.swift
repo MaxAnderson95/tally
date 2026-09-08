@@ -40,9 +40,8 @@ struct AccountDetails: View {
             rows += [("Available resets", groups.resetSummary.data?.availableCount.map(String.init) ?? "Unavailable"),
                      ("Provider-applicable", groups.resetSummary.data?.applicableAvailableCount.map(String.init) ?? "Not reported")]
         }
-        if let extra = groups.extraUsage.data {
-            rows.append(("Extra usage", extra.presentation))
-            if let used = extra.used { rows.append((account.provider == "xai" ? "PAYG source" : "Extra usage source", "\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")")) }
+        if let used = groups.extraUsage.data?.used {
+            rows.append((account.provider == "xai" ? "PAYG source" : "Extra usage source", "\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")"))
         }
         for window in account.overviewWindows {
             rows += [("\(window.label) scope", window.scopeNote ?? window.scope),
