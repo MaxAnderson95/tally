@@ -81,16 +81,27 @@ export const ActivityResponse = object({
 })
 
 const id = text.min(1)
+export const Redemption = object({
+  operationId: text, accountId: text, accountName: text, requestedCreditId: nullableText, selectedCreditId: nullableText,
+  createdAt: text, updatedAt: text, state: z.enum(['pending', 'confirmed', 'nothing_to_reset', 'no_credit', 'failed', 'unknown']),
+  providerResult: object({ code: text, windowsReset: nullableNumber }).nullable(), error: Fault.nullable(),
+  acknowledgementRequired: flag, acknowledgedAt: nullableText, resultUrl: text,
+})
+const operationId = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'Use the original operation UUID')
 // Anthropic requires an object root; action-specific field pairing is checked during execution.
 export const Input = z.strictObject({
-  action: z.enum(['status', 'accounts', 'activity', 'refresh']),
+  action: z.enum(['status', 'accounts', 'activity', 'refresh', 'redeem', 'redemption', 'acknowledge']),
   accountId: id.optional(), range: Range.optional(), accountIds: z.array(id).optional(),
+  operationId: operationId.optional(), creditId: id.optional(),
 })
 export const Command = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('status') }),
   z.strictObject({ action: z.literal('accounts'), accountId: id.optional() }),
   z.strictObject({ action: z.literal('activity'), range: Range.optional() }),
   z.strictObject({ action: z.literal('refresh'), accountIds: z.array(id).optional() }),
+  z.strictObject({ action: z.literal('redeem'), accountId: id, operationId, creditId: id.optional() }),
+  z.strictObject({ action: z.literal('redemption'), operationId }),
+  z.strictObject({ action: z.literal('acknowledge'), operationId }),
 ])
 export type TallyInput = z.infer<typeof Input>
 export const Result = z.union([
@@ -98,6 +109,9 @@ export const Result = z.union([
   object({ ok: z.literal(true), action: z.literal('accounts'), data: z.union([AccountsResponse, AccountResponse]) }),
   object({ ok: z.literal(true), action: z.literal('activity'), data: ActivityResponse }),
   object({ ok: z.literal(true), action: z.literal('refresh'), data: RefreshResponse }),
-  object({ ok: z.literal(false), action: z.enum(['status', 'accounts', 'activity', 'refresh']), error: Fault }),
+  object({ ok: z.literal(true), action: z.literal('redeem'), data: Redemption }),
+  object({ ok: z.literal(true), action: z.literal('redemption'), data: Redemption }),
+  object({ ok: z.literal(true), action: z.literal('acknowledge'), data: Redemption }),
+  object({ ok: z.literal(false), action: z.enum(['status', 'accounts', 'activity', 'refresh', 'redeem', 'redemption', 'acknowledge']), error: Fault }),
 ])
 export type TallyResult = z.infer<typeof Result>

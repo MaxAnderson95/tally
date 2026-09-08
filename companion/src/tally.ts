@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { Input, Command, Result, Status, AccountsResponse, AccountResponse, ActivityResponse, RefreshResponse, Fault } from './contract.ts'
+import { Input, Command, Result, Status, AccountsResponse, AccountResponse, ActivityResponse, RefreshResponse, Redemption, Fault } from './contract.ts'
 import type { TallyInput, TallyResult } from './contract.ts'
 
 export const defaultBaseURL = 'http://127.0.0.1:7483'
@@ -47,35 +47,55 @@ export function createTally(options: unknown = {}) {
     return decode(Status, data)
   }
 
-  async function query(input: TallyInput): Promise<TallyResult> {
+  async function query(raw: TallyInput): Promise<TallyResult> {
     try {
       if (!validBase) throw fault('invalid_configuration', 'Set baseURL to the Tally HTTP(S) origin, with no credentials, path, query, or fragment.')
-      const validated = Command.safeParse(input)
-      if (!validated.success) throw fault('invalid_request', 'Use status, accounts with optional accountId, activity with optional today/yesterday/last30days range, or refresh with optional accountIds. IDs must be nonempty strings; unrelated fields are not accepted.')
-      const command = validated.data
+      const validated = Command.safeParse(raw)
+      if (!validated.success) throw fault('invalid_request', 'Use an action with its documented fields. Account and credit IDs must be nonempty; reset actions require the original operation UUID. Unrelated fields are not accepted.')
+      const input = validated.data
+      if (input.action === 'redeem' || input.action === 'redemption' || input.action === 'acknowledge') {
+        status(await request('/status'))
+        const path = `/redemptions/${encodeURIComponent(input.operationId)}`
+        if (input.action === 'redemption') return { ok: true, action: input.action, data: decode(Redemption, await request(path)) }
+        try {
+          const data = input.action === 'redeem'
+            ? await request(`/accounts/${encodeURIComponent(input.accountId)}/redemptions`, { operationId: input.operationId, ...(input.creditId === undefined ? {} : { creditId: input.creditId }) })
+            : await request(`${path}/acknowledge`, {})
+          return { ok: true, action: input.action, data: decode(Redemption, data) }
+        } catch (error) {
+          const known = Fault.safeParse(error)
+          if (known.success && !['app_unavailable', 'invalid_response', 'http_error'].includes(known.data.code)) throw error
+          // A lost mutation response is not evidence of failure. Only read the original operation.
+          try {
+            return { ok: true, action: input.action, data: decode(Redemption, await request(path)) }
+          } catch {
+            throw fault('operation_response_unknown', `The ${input.action} response was lost or incompatible; its outcome is uncertain. Original operation UUID: ${input.operationId}. Read it with redemption using that UUID. Do not resend, generate a replacement UUID, or infer success from changed usage. Ask the user before acknowledgement or a new operation.`)
+          }
+        }
+      }
       // Refresh has no status envelope, so verify compatibility before scheduling any work.
-      if (command.action === 'status' || command.action === 'refresh') {
+      if (input.action === 'status' || input.action === 'refresh') {
         const current = status(await request('/status'))
-        if (command.action === 'status') return { ok: true, action: command.action, data: current }
-        return { ok: true, action: command.action, data: decode(RefreshResponse, await request('/refresh', command.accountIds === undefined ? {} : { accountIds: command.accountIds })) }
+        if (input.action === 'status') return { ok: true, action: input.action, data: current }
+        return { ok: true, action: input.action, data: decode(RefreshResponse, await request('/refresh', input.accountIds === undefined ? {} : { accountIds: input.accountIds })) }
       }
-      if (command.action === 'accounts') {
-        const data = await request(command.accountId === undefined ? '/accounts' : `/accounts/${encodeURIComponent(command.accountId)}`)
+      if (input.action === 'accounts') {
+        const data = await request(input.accountId === undefined ? '/accounts' : `/accounts/${encodeURIComponent(input.accountId)}`)
         status(decode(z.object({ status: z.unknown() }), data).status)
-        return { ok: true, action: command.action, data: command.accountId === undefined ? decode(AccountsResponse, data) : decode(AccountResponse, data) }
+        return { ok: true, action: input.action, data: input.accountId === undefined ? decode(AccountsResponse, data) : decode(AccountResponse, data) }
       }
-      const data = await request(`/activity${command.range === undefined ? '' : `?range=${command.range}`}`)
+      const data = await request(`/activity${input.range === undefined ? '' : `?range=${input.range}`}`)
       status(decode(z.object({ status: z.unknown() }), data).status)
-      return { ok: true, action: command.action, data: decode(ActivityResponse, data) }
+      return { ok: true, action: input.action, data: decode(ActivityResponse, data) }
     } catch (error) {
       const known = Fault.safeParse(error)
-      return { ok: false, action: input.action, error: known.success ? known.data : fault('invalid_response', 'The Tally query failed without a compatible result.') }
+      return { ok: false, action: raw.action, error: known.success ? known.data : fault('invalid_response', 'The Tally query failed without a compatible result.') }
     }
   }
 
   return {
     name: 'tally',
-    description: 'Query Tally periodically while working to check remaining subscription usage, freshness, reset times and pacing. status checks the app and accepts no optional fields; accounts lists all Accounts or reads an optional opaque accountId; activity reads retained provider-level OpenCode activity with optional range (today by default); refresh schedules reads with optional accountIds and returns started/joined/deferred/blocked state without waiting for collection. Optional fields belong only to their named action. Null is unknown, not zero. Keep stale readings, partial history and pricing coverage visible. Inventory and activity belong to the Mac running Tally, regardless of this OpenCode instance. Activity and API-equivalent estimates are not measured quota consumption or subscription charges.',
+    description: 'Query Tally periodically while working to check remaining subscription usage, freshness, reset times and pacing. status checks the app; accounts lists all Accounts or reads an explicit opaque accountId; activity reads retained provider-level OpenCode activity (today by default); refresh schedules reads without waiting for collection. Queries are model-directed. Every redeem requires a specific explicit user request to consume one banked reset for the named Account; standing permission, low usage, and keep working do not qualify. Resolve names through accounts and ask the user to clarify ambiguous names to an opaque accountId. Never select an active or fallback Account implicitly. Omit creditId for app selection or supply the specifically requested credit. Nullable applicability means not reported, not zero or ineligible; the provider decides which windows reset. Use one operation UUID per explicitly authorized redemption and retain it. Never automatically retry a mutation or generate a replacement UUID after response loss. The companion attempts one read of that original operation after response loss; if unresolved it reports uncertainty and the original UUID. Use redemption with that UUID for further progress reads. Pending is accepted, not confirmed; return promptly and query progress separately. Unknown requires asking the user before acknowledgement or a new operation. Every acknowledge also requires specific explicit user instruction; it releases the block without retrying or changing unknown to confirmed. Tally trusts this local client authorization claim and cannot inspect the conversation. Confirmed outcomes remain confirmed independently of failed usage refresh; do not infer reset effects or success from changed readings. Keep operation IDs, result URLs, acknowledgement requirements and structured faults visible. Null is unknown, not zero. Keep stale readings, partial history and pricing coverage visible. Inventory and activity belong to the Mac running Tally. Activity and API-equivalent estimates are not measured quota consumption or subscription charges.',
     input: Input,
     output: Result,
     options: { codemode: false as const },

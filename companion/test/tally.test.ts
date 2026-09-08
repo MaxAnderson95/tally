@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { z } from 'zod'
 import { createTally, defaultBaseURL } from '../src/tally.ts'
-import { Input, Command, Result, AccountsResponse, ActivityResponse, RefreshResponse } from '../src/contract.ts'
+import { Input, Command, Result, AccountsResponse, ActivityResponse, RefreshResponse, Redemption } from '../src/contract.ts'
 import type { TallyInput } from '../src/contract.ts'
 import plugin from '../src/index.ts'
 
@@ -168,10 +168,110 @@ test('the output schema rejects success DTOs paired with the wrong action', () =
     assert.equal(Result.safeParse({ ok: true, action, data }).success, false)
   }
   const schema = z.toJSONSchema(Result)
-  assert(schema.anyOf && schema.anyOf.length === 5)
+  assert(schema.anyOf && schema.anyOf.length === 8)
   const inputSchema = z.toJSONSchema(createTally().input, { target: 'draft-2020-12', io: 'input' })
   assert.equal(inputSchema.type, 'object')
   for (const keyword of ['anyOf', 'oneOf', 'allOf']) assert.equal(keyword in inputSchema, false)
   assert.deepEqual(Input.parse({ action: 'activity', range: 'today' }), { action: 'activity', range: 'today' })
   assert.equal(plugin.id, 'tally')
+})
+
+const operations = z.array(Redemption).parse(fixture('redemptions'))
+const operationId = operations[0].operationId
+
+test('reset actions map exact requests, preserve pending and duplicate UUIDs, and pair concrete outputs', async () => {
+  await serve(async (baseURL, requests) => {
+    const tally = createTally({ baseURL })
+    const input = { action: 'redeem', accountId: 'opaque /?#', operationId } as const
+    for (const creditId of [undefined, undefined, 'credit-a']) {
+      const result = await tally.execute({ ...input, ...(creditId === undefined ? {} : { creditId }) })
+      assert.deepEqual(result.output, { ok: true, action: 'redeem', data: operations[0] })
+      assert.deepEqual(requests.at(-1), { path: '/api/v1/accounts/opaque%20%2F%3F%23/redemptions', method: 'POST', contentType: 'application/json', body: JSON.stringify({ operationId, ...(creditId === undefined ? {} : { creditId }) }) })
+      assert(Result.safeParse(result.output).success)
+    }
+    assert.equal(requests.length, 6)
+    for (const action of ['redemption', 'acknowledge'] as const) {
+      const result = await tally.execute({ action, operationId })
+      assert.equal(result.output.ok, true)
+      assert(Result.safeParse(result.output).success)
+      assert.equal(requests.at(-1)?.path, `/api/v1/redemptions/${operationId}${action === 'acknowledge' ? '/acknowledge' : ''}`)
+      assert.equal(requests.at(-1)?.body, action === 'acknowledge' ? '{}' : '')
+      assert.equal(Result.safeParse({ ok: true, action, data: refresh }).success, false)
+    }
+  }, path => ({ status: path.endsWith('/redemptions') ? 202 : 200, data: path === '/api/v1/status' ? accounts.status : operations[0] }))
+})
+
+test('all durable states and acknowledgement remain independent of usage refresh', async () => {
+  for (const data of [...operations, ...(['nothing_to_reset', 'no_credit', 'failed'] as const).map(state => ({ ...operations[0], state }))]) {
+    await serve(async (baseURL, requests) => {
+      const result = await createTally({ baseURL }).execute({ action: data.acknowledgedAt ? 'acknowledge' : 'redemption', operationId: data.operationId })
+      assert.deepEqual(result.output, { ok: true, action: data.acknowledgedAt ? 'acknowledge' : 'redemption', data })
+      assert.equal(requests.length, 2)
+      assert(!requests.some(request => request.path.includes('refresh')))
+    }, path => ({ data: path === '/api/v1/status' ? accounts.status : path.includes('refresh') ? { error: { code: 'collection_failed' } } : data }))
+  }
+})
+
+test('reset HTTP conflicts and blocks preserve the original structured fault without retry or lookup', async () => {
+  for (const code of ['operation_conflict', 'account_blocked', 'recovery_storage_unavailable']) {
+    const error = { code, message: 'Cannot accept.', retryAt: '2030-09-08T00:00:00Z', blockingOperationId: operationId }
+    await serve(async (baseURL, requests) => {
+      const result = await createTally({ baseURL }).execute({ action: 'redeem', accountId: 'opaque', operationId })
+      assert.deepEqual(result.output, { ok: false, action: 'redeem', error })
+      assert.equal(requests.length, 2)
+    }, path => path === '/api/v1/status' ? { data: accounts.status } : { status: code === 'recovery_storage_unavailable' ? 503 : 409, data: { error } })
+  }
+})
+
+test('lost mutation responses read only the original UUID; missing lookup retains uncertainty', async () => {
+  for (const action of ['redeem', 'acknowledge'] as const) {
+    for (const recovered of [true, false]) {
+      const requests: { method: string; path: string; body: string }[] = []
+      const server = createServer(async (req, res) => {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        requests.push({ method: req.method!, path: req.url!, body })
+        if (req.method === 'POST') { req.socket.destroy(); return }
+        const data = req.url === '/api/v1/status' ? accounts.status : recovered ? operations[1] : { error: { code: 'operation_not_found', message: 'Not found', retryAt: null, blockingOperationId: null } }
+        res.writeHead(req.url !== '/api/v1/status' && !recovered ? 404 : 200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(data))
+      })
+      server.listen(0, '127.0.0.1')
+      await once(server, 'listening')
+      const address = server.address()
+      assert(address && typeof address !== 'string')
+      try {
+        const tally = createTally({ baseURL: `http://127.0.0.1:${address.port}` })
+        const result = await tally.execute(action === 'redeem' ? { action, accountId: 'opaque', operationId } : { action, operationId })
+        assert.equal(result.output.ok, recovered)
+        if (result.output.ok) assert.deepEqual(result.output.data, operations[1])
+        else {
+          assert.equal(result.output.error.code, 'operation_response_unknown')
+          assert(result.output.error.message.includes(operationId))
+          assert.match(result.output.error.message, /uncertain/)
+        }
+        assert.equal(requests.length, 3)
+        assert.equal(requests.filter(request => request.method === 'POST').length, 1)
+        assert.equal(requests.at(-1)?.path, `/api/v1/redemptions/${operationId}`)
+      } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+    }
+  }
+})
+
+test('reset inputs reject invalid UUIDs and app/version failure prevents mutation', async () => {
+  for (const action of ['redeem', 'redemption', 'acknowledge'] as const) {
+    assert.equal(Input.safeParse({ action, operationId: 'replacement' }).success, false)
+    await serve(async (baseURL, requests) => {
+      const result = await createTally({ baseURL }).execute(action === 'redeem' ? { action, accountId: 'opaque', operationId } : { action, operationId })
+      assert.equal(result.output.ok, false)
+      if (!result.output.ok) assert.equal(result.output.error.code, 'incompatible_api')
+      assert.equal(requests.length, 1)
+      assert.equal(requests[0].method, 'GET')
+    }, () => ({ data: { ...accounts.status, apiMajor: 2 } }))
+  }
+  let closedURL = ''
+  await serve(async baseURL => { closedURL = baseURL })
+  const result = await createTally({ baseURL: closedURL }).execute({ action: 'redeem', accountId: 'opaque', operationId })
+  assert.equal(result.output.ok, false)
+  if (!result.output.ok) assert.equal(result.output.error.code, 'app_unavailable')
 })
