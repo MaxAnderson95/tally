@@ -70,10 +70,10 @@ struct OpenAIUsage: Sendable {
                 for (slot, meter) in [("primary", limit?.primary_window), ("secondary", limit?.secondary_window)] {
                     guard let meter else { continue }
                     let duration = meter.limit_window_seconds.flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
-                    let label = duration == 604_800 ? "Weekly" : duration == 18_000 ? "5-hour" : duration.map { "\($0.formatted(.number.precision(.fractionLength(0))))-second" } ?? slot.capitalized
+                    let label = duration == 604_800 ? "Weekly" : duration == 18_000 ? "5-hour" : duration.map { "\($0.formatted(.number.grouping(.never).precision(.fractionLength(0)).locale(Locale(identifier: "en_US_POSIX"))))-second" } ?? slot.capitalized
                     let reset = meter.reset_at.map(Date.init(timeIntervalSince1970:)) ?? meter.reset_after_seconds.map { now.addingTimeInterval($0) }
                     windows.append(QuotaWindow(id: "\(prefix):\(slot)", label: name.map { "\($0) \(label)" } ?? label,
-                                               scope: name == nil ? "account" : "model", modelId: model,
+                                               scope: name == nil ? "account" : model == nil ? "other" : "model", modelId: model,
                                                cadence: duration == 604_800 ? "weekly" : duration == 18_000 ? "rolling" : "other",
                                                durationSeconds: duration, durationSource: duration == nil ? "unknown" : "provider",
                                                usedPercent: meter.used_percent, resetAt: reset, displayInOverview: name == nil))

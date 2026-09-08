@@ -1,8 +1,8 @@
 {
   "quotas": {"windows": [
-    {"id":"additional:spark:Spark:primary","label":"Spark 7,200-second","scope":"model","scopeNote":null,"modelId":"spark-model","cadence":"other","durationSeconds":7200,"durationSource":"provider","usedPercent":25,"remainingPercent":null,"resetAt":"2030-09-07T18:03:20.000Z","resetState":"unknown","stale":false,"displayInOverview":false,"pacing":null,"pacingUnavailableReason":null},
+    {"id":"additional:spark:Spark:primary","label":"Spark 7200-second","scope":"model","scopeNote":null,"modelId":"spark-model","cadence":"other","durationSeconds":7200,"durationSource":"provider","usedPercent":25,"remainingPercent":null,"resetAt":"2030-09-07T18:03:20.000Z","resetState":"unknown","stale":false,"displayInOverview":false,"pacing":null,"pacingUnavailableReason":null},
     {"id":"rate_limit:primary","label":"Weekly","scope":"account","scopeNote":null,"modelId":null,"cadence":"weekly","durationSeconds":604800,"durationSource":"provider","usedPercent":100,"remainingPercent":null,"resetAt":"2030-09-09T16:00:00.000Z","resetState":"unknown","stale":false,"displayInOverview":true,"pacing":null,"pacingUnavailableReason":null},
-    {"id":"additional:reserve:Reserve:secondary","label":"Reserve Secondary","scope":"model","scopeNote":null,"modelId":null,"cadence":"other","durationSeconds":null,"durationSource":"unknown","usedPercent":null,"remainingPercent":null,"resetAt":null,"resetState":"unknown","stale":false,"displayInOverview":false,"pacing":null,"pacingUnavailableReason":null}
+    {"id":"additional:reserve:Reserve:secondary","label":"Reserve Secondary","scope":"other","scopeNote":null,"modelId":null,"cadence":"other","durationSeconds":null,"durationSource":"unknown","usedPercent":null,"remainingPercent":null,"resetAt":null,"resetState":"unknown","stale":false,"displayInOverview":false,"pacing":null,"pacingUnavailableReason":null}
   ]},
   "balances": {"items": [{"unit": "credits", "quantity": "12.5", "money": null, "referenceValue": {"amount": "0.5", "currency": "USD", "provenance": "reference_conversion", "source": {"amount": "12.5", "unit": "credits", "exponent": null}}, "unlimited": false}]},
   "details": {

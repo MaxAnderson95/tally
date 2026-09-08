@@ -99,7 +99,6 @@ public struct QuotaWindow: Codable, Sendable, Identifiable {
     }
 }
 
-// Go has no observations for these groups. Other provider slices add their concrete data types.
 public struct AbsentData: Codable, Sendable {}
 public struct AccountGroups: Codable, Sendable {
     public var plan = Group<Plan>()
