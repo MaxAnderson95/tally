@@ -3,15 +3,15 @@
 
 # Tally
 
-A personal macOS AI subscription usage tracker for the menu bar, mobile web, and REST API. Tally discovers stored Anthropic, OpenAI, OpenCode Go, and xAI/Grok subscription Accounts and collects OpenCode Go quotas.
+A personal macOS AI subscription usage tracker for the menu bar, mobile web, and REST API. Tally collects stored Anthropic, OpenAI, OpenCode Go, and xAI/Grok subscription Accounts.
 
-The accepted v1 specification includes multiple Accounts and OpenAI banked-reset redemption. Recorded activity has reviewed API-equivalent estimates. The shared owner and REST support durable reset commands; native/web confirmation controls and the companion follow separately.
+Recorded activity has reviewed API-equivalent estimates. Native, web, REST, and the independently installed companion share one owner's readings and durable reset commands. Native and web require inline confirmation before submitting a reset.
 
 The independently installed [OpenCode companion](companion/README.md) registers one `tally` model tool for status, Account list/detail, activity and refresh queries. Its description encourages periodic usage checks. It supports REST API major 1 and an optional personal-tailnet base URL.
 
 Provider viability findings are in [docs/RESEARCH.md](docs/RESEARCH.md).
 
-## Build and run the Go slice
+## Build and install
 
 Requires Apple Silicon macOS 26+, Swift 6.3, and Node 22.12+ on the build machine. The packaged app contains its executable and compiled React web assets; Node is not used at runtime.
 
@@ -20,13 +20,15 @@ bash scripts/build-app.sh
 open build/Tally.app
 ```
 
+Copy the complete app to `~/Applications/Tally.app` before first setup. First launch registers that main app for launch at login; Settings can disable it or open macOS Login Items when approval is required. No helper is installed. See [installation and update instructions](docs/INSTALLATION.md) and [assembled verification](docs/verification/installation.md) for tested behavior and remaining physical/tailnet checks.
+
 Click Tally's menu bar glyph to open the 360px native popover. Closing it leaves collection and HTTP running. Quit Tally stops both. The app collects on launch, wake, and every two minutes. Refresh schedules collection with in-flight joining and a 15-second minimum between attempts. GET requests read the owner's cache only. Failed collection keeps last-good readings stale; recognized Accounts restore cached readings as stale after restart.
 
 The web app and `/api/v1/status`, `/api/v1/accounts`, `/api/v1/accounts/{id}`, and `POST /api/v1/refresh` use loopback port **7483** by default:
 
 http://127.0.0.1:7483
 
-Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests activity only. Every valid explicit refresh schedules activity independently of provider cooldowns. The unused Go groups have successful null observations after collection.
+Refresh accepts `{}` or `{"accountIds":["opaque-account-id"]}` as `application/json`. An empty Account list requests activity only. Every valid explicit refresh schedules activity independently of provider cooldowns. Unsupported Go groups have successful null observations after collection.
 
 `POST /api/v1/accounts/{accountId}/redemptions` accepts `{"operationId":"client-UUID","creditId":"optional-explicit-credit-ID"}`. Omit `creditId` for expiry-ordered selection from a fresh preflight. Submission returns 202 while pending or 200 for a retained outcome, with `Location` equal to `resultUrl`. Retry submission with the same UUID and original request, or read `GET /api/v1/redemptions/{operationId}`. A consume can spend one real credit and requires an explicit user request targeting that Account. Tally never automatically retries the provider mutation.
 

@@ -68,6 +68,12 @@ func fixture(_ name: String) throws -> Data {
         let suffix = dark ? "dark" : "light"
         try capture(Dashboard(runtime: runtime), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
         try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 640, name: "native-activity-\(suffix)", dark: dark)
+        let previousActivity = runtime.activity
+        runtime.activity?.activity.data = try Wire.decoder().decode(ActivityData.self, from: fixture("activity-pricing"))
+        runtime.activityRange = .today
+        try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 1100, name: "native-pricing-\(suffix)", dark: dark)
+        runtime.activity = previousActivity
+        runtime.activityRange = .last30days
         for account in snapshot.accounts.prefix(4) {
             try capture(AccountCard(account: account, runtime: runtime), width: 336, height: 460, name: "native-\(account.provider)-\(suffix)", dark: dark)
         }

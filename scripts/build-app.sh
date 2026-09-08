@@ -11,7 +11,7 @@ cp -R .build/arm64-apple-macosx/release/Tally_TallyApp.bundle "$app/Contents/Res
 cp -R .build/arm64-apple-macosx/release/Tally_TallyCore.bundle "$app/Contents/Resources/"
 rm -rf "$app/Contents/Resources/Web"
 cp -R web/dist "$app/Contents/Resources/Web"
-revision="$(git rev-parse --short HEAD)"
+revision="$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -3,6 +3,7 @@ import SwiftUI
 import TallyCore
 import TallyHTTP
 import Combine
+import ServiceManagement
 
 @MainActor
 final class Runtime: ObservableObject {
@@ -17,6 +18,8 @@ final class Runtime: ObservableObject {
     @Published var webOrigin: String
     @Published var settingsError: String?
     @Published var storageError: String?
+    @Published var loginEnabled = false
+    @Published var loginMessage: String?
     @Published var resetOperations: [String: Redemption] = [:]
     @Published var resetErrors: [String: String] = [:]
     @Published var resetBusy: Set<String> = []
@@ -25,9 +28,13 @@ final class Runtime: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var displayTask: Task<Void, Never>?
     private var wakeObserver: NSObjectProtocol?
+    private let settings: UserDefaults
+    private let assetDirectory: URL
+    private var stopping = false
 
-    init(owner: TallyOwner? = nil) {
-        let settings = UserDefaults.standard
+    init(owner: TallyOwner? = nil, settings: UserDefaults = .standard, assetDirectory: URL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Web")) {
+        self.settings = settings
+        self.assetDirectory = assetDirectory
         let path = settings.string(forKey: "databasePath") ?? OpenCodeInventory.defaultPath()
         databasePath = path
         port = String(settings.object(forKey: "port") as? Int ?? 7483)
@@ -36,6 +43,10 @@ final class Runtime: ObservableObject {
     }
 
     func start() {
+        guard pollingTask == nil, !stopping else { return }
+        if settings.object(forKey: "port") == nil { settings.set(Int(port), forKey: "port") }
+        if !settings.bool(forKey: "loginSetupCompleted") { setLaunchAtLogin(true) }
+        readLoginStatus()
         startServer()
         pollingTask = Task {
             await owner.wake()
@@ -55,6 +66,23 @@ final class Runtime: ObservableObject {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.owner.wake() }
         }
+    }
+
+    func readLoginStatus() {
+        let status = SMAppService.mainApp.status
+        loginEnabled = status == .enabled || status == .requiresApproval
+        if status == .requiresApproval { loginMessage = "Allow Tally in System Settings > General > Login Items." }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            let service = SMAppService.mainApp
+            if enabled && service.status != .enabled && service.status != .requiresApproval { try service.register() }
+            if !enabled && service.status != .notRegistered { try service.unregister() }
+            settings.set(true, forKey: "loginSetupCompleted")
+            loginMessage = nil
+        } catch { loginMessage = "Launch at login could not be changed: \(error.localizedDescription)" }
+        readLoginStatus()
     }
 
     func refresh() async {
@@ -103,29 +131,34 @@ final class Runtime: ObservableObject {
     }
 
     func startServer() {
-        guard serverTask == nil else { return }
-        guard let number = Int(port), (1024...65535).contains(number) else { listenerError = "Choose a port between 1024 and 65535."; return }
-        if !webOrigin.isEmpty {
-            guard let url = URL(string: webOrigin), url.scheme == "https", url.host != nil,
-                  url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, url.path.isEmpty else {
-                listenerError = "Enter an HTTPS origin with no path, for example https://tally.example.ts.net."; return
-            }
-        }
+        guard serverTask == nil, !stopping else { return }
+        guard validateListenerSettings() else { return }
+        let number = Int(port)!
         let policy = HTTPPolicy(port: number, webOrigin: webOrigin.isEmpty ? nil : webOrigin)
-        let directory = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Web")
         listenerError = nil
         serverTask = Task {
-            do { try await makeHTTPApplication(owner: owner, policy: policy, assetDirectory: directory).run() }
+            do { try await makeHTTPApplication(owner: owner, policy: policy, assetDirectory: assetDirectory).run() }
             catch { if !Task.isCancelled { listenerError = "Web/API unavailable on port \(number). Check the port and bundled assets, then retry." } }
             serverTask = nil
         }
     }
 
+    private func validateListenerSettings() -> Bool {
+        guard let number = Int(port), (1024...65535).contains(number) else { listenerError = "Choose a port between 1024 and 65535."; return false }
+        if !webOrigin.isEmpty {
+            guard let url = URL(string: webOrigin), url.scheme == "https", url.host != nil,
+                  url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, url.path.isEmpty else {
+                listenerError = "Enter an HTTPS origin with no path, for example https://tally.example.ts.net."; return false
+            }
+        }
+        return true
+    }
+
     func saveSettings() async {
-        guard let number = Int(port), (1024...65535).contains(number) else { listenerError = "Choose a port between 1024 and 65535."; return }
-        UserDefaults.standard.set(databasePath, forKey: "databasePath")
-        UserDefaults.standard.set(number, forKey: "port")
-        UserDefaults.standard.set(webOrigin, forKey: "webOrigin")
+        guard !stopping, validateListenerSettings(), let number = Int(port) else { return }
+        settings.set(databasePath, forKey: "databasePath")
+        settings.set(number, forKey: "port")
+        settings.set(webOrigin, forKey: "webOrigin")
         do { try await owner.setDatabasePath(databasePath); settingsError = nil }
         catch let fault as Fault { settingsError = fault.message }
         catch { settingsError = "Cannot read the selected database." }
@@ -149,6 +182,7 @@ final class Runtime: ObservableObject {
     }
 
     func stop() async {
+        stopping = true
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         pollingTask?.cancel(); displayTask?.cancel(); serverTask?.cancel()
         await owner.shutdown()
@@ -207,6 +241,11 @@ struct Dashboard: View {
                     Button("Quit Tally") { NSApplication.shared.terminate(nil) }
                 }
                 if settings {
+                    Toggle("Launch at login", isOn: Binding(get: { runtime.loginEnabled }, set: { runtime.setLaunchAtLogin($0) }))
+                    if let message = runtime.loginMessage {
+                        Text(message).font(.caption)
+                        Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                    }
                     TextField("OpenCode database path", text: $runtime.databasePath)
                     Text("Manage Account names and authentication in OpenCode.").font(.caption)
                     if let error = runtime.settingsError { Text(error).font(.caption) }

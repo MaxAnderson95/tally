@@ -5,6 +5,7 @@ import HummingbirdTesting
 import HTTPTypes
 @testable import TallyCore
 import TallyHTTP
+@testable import TallyApp
 
 private let testAuthority = HTTPField.Name("X-Test-Authority")!
 
@@ -99,7 +100,7 @@ private struct AuthorityResponder: HTTPResponder {
     }
 }
 
-@Test func listenerCollisionAndFreshLifetime() async throws {
+@Test @MainActor func listenerCollisionAndFreshLifetime() async throws {
     let owner = TallyOwner(clock: { Date() }, inventory: { InventoryRead(databaseIdentity: "test-db", credentials: []) }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -111,7 +112,20 @@ private struct AuthorityResponder: HTTPResponder {
         if let port = channel.localAddress?.port { ready.yield(port); ready.finish() }
     })
     let firstTask = Task { try await first.run() }
-    let port = try #require(await ports.first(where: { _ in true }))
+    let port = try #require(await ports.first(where: { @Sendable _ in true }))
+    let suite = "tally-lifecycle-\(UUID().uuidString)"
+    let settings = try #require(UserDefaults(suiteName: suite))
+    defer { settings.removePersistentDomain(forName: suite) }
+    settings.set(port, forKey: "port")
+    let runtime = Runtime(owner: owner, settings: settings, assetDirectory: directory)
+    runtime.startServer()
+    for _ in 0..<100 where runtime.listenerError == nil { try await Task.sleep(for: .milliseconds(20)) }
+    #expect(runtime.listenerError != nil)
+    #expect(settings.integer(forKey: "port") == port)
+    runtime.webOrigin = "http://bad.example/path"
+    await runtime.saveSettings()
+    #expect(settings.string(forKey: "webOrigin") == nil)
+    runtime.webOrigin = ""
     let collision = try makeHTTPApplication(owner: owner, policy: HTTPPolicy(port: port), assetDirectory: directory)
     do {
         try await collision.run()
@@ -120,12 +134,25 @@ private struct AuthorityResponder: HTTPResponder {
     #expect(try await owner.refresh().accounts.isEmpty)
     firstTask.cancel()
     _ = await firstTask.result
+    runtime.startServer()
+    let url = URL(string: "http://127.0.0.1:\(port)/api/v1/status")!
+    var reachable = false
+    for _ in 0..<100 {
+        if let (_, response) = try? await URLSession.shared.data(from: url), (response as? HTTPURLResponse)?.statusCode == 200 { reachable = true; break }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(reachable)
+    #expect(runtime.listenerError == nil)
+    await runtime.stop()
+    #expect(await owner.snapshot().status.owner == "shutting_down")
+    runtime.startServer()
+    #expect((try? await URLSession.shared.data(from: url)) == nil)
     let (restarted, signal) = AsyncStream<Bool>.makeStream()
     let fresh = Application(responder: responder, configuration: .init(address: .hostname("127.0.0.1", port: port)), onServerRunning: { _ in
         signal.yield(true); signal.finish()
     })
     let freshTask = Task { try await fresh.run() }
-    #expect(await restarted.first(where: { _ in true }) == true)
+    #expect(await restarted.first(where: { @Sendable _ in true }) == true)
     freshTask.cancel()
     _ = await freshTask.result
 }
