@@ -157,6 +157,12 @@ public actor TallyOwner {
 
     private func cacheAccounts() {
         guard let databaseIdentity, var namespace = store.state.namespaces[databaseIdentity] else { return }
+        if namespace.colorsByCredential == nil { namespace.colorsByCredential = [:] }
+        for account in accounts {
+            if let credential = credentials[account.id] {
+                namespace.colorsByCredential?[credential.colorPreferenceKey] = account.identityColorIndex
+            }
+        }
         for index in namespace.records.indices {
             if let account = accounts.first(where: { $0.id == namespace.records[index].account.id }) { namespace.records[index].account = account }
             namespace.records[index].attempts = attempts[namespace.records[index].account.id]
@@ -222,6 +228,8 @@ public actor TallyOwner {
                 namespace.records.append(IdentityRecord(evidence: credential.evidence, account: account, present: true))
             }
             account.name = credential.name
+            // Cosmetic preferences follow the OpenCode row, independently of credential identity.
+            account.identityColorIndex = namespace.colorsByCredential?[credential.colorPreferenceKey] ?? account.identityColorIndex
             if let previous = credentials[account.id], previous.fingerprint != credential.fingerprint {
                 for key in tasks.keys where key.account == account.id { tasks[key]?.cancel(); tasks[key] = nil }
                 account.groups.plan.refreshing = false

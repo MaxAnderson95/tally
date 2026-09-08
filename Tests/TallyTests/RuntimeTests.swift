@@ -89,6 +89,14 @@ func fixture(_ name: String) throws -> Data {
         let suffix = dark ? "dark" : "light"
         try capture(Dashboard(runtime: runtime, showSettings: {}), width: 360, height: 650, name: "native-360-\(suffix)", dark: dark)
         try capture(TallySettings(runtime: runtime), width: 520, height: 560, name: "settings-\(suffix)", dark: dark)
+        var paced = QuotaWindow(id: "weekly", label: "Weekly", cadence: "weekly", durationSeconds: 604_800, durationSource: "provider", usedPercent: 31, resetAt: now.addingTimeInterval(449_280))
+        paced.derive(at: now, groupStale: false)
+        var healthy = paced
+        healthy.usedPercent = 10; healthy.derive(at: now, groupStale: false)
+        try capture(VStack(spacing: 20) {
+            QuotaRow(window: healthy, now: now)
+            QuotaRow(window: paced, now: now)
+        }.padding(12), width: 336, height: 180, name: "quota-pacing-\(suffix)", dark: dark)
         try capture(RecordedActivity(runtime: runtime).padding(12), width: 360, height: 640, name: "native-activity-\(suffix)", dark: dark)
         let previousActivity = runtime.activity
         runtime.activity?.activity.data = try Wire.decoder().decode(ActivityData.self, from: fixture("activity-pricing"))
@@ -688,6 +696,38 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await restarted.snapshot().accounts.allSatisfy { !$0.pinned && $0.pinOrder == nil })
 }
 
+@Test(arguments: ["anthropic", "xai"]) func chosenColorSurvivesRestartWithRotatedCredentials(provider: String) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("accounts.json")
+    let scenario = InventoryScenario()
+    var credential = StoredCredential(storedID: "stable-row", name: "Personal", key: "access", provider: provider, refresh: "refresh")
+    scenario.set([credential])
+    let owner = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    try await owner.refresh(accountIDs: [])
+    let original = try #require(await owner.snapshot().accounts.first)
+    try await owner.setIdentityColor(accountID: original.id, index: 4)
+    await owner.shutdown()
+    credential.key = "rotated-access"; credential.refresh = "rotated-refresh"
+    scenario.set([credential])
+    let restarted = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    try await restarted.refresh(accountIDs: [])
+    let restored = try #require(await restarted.snapshot().accounts.first)
+    #expect(restored.id != original.id)
+    #expect(restored.identityColorIndex == 4)
+    #expect(!restored.pinned)
+    var unrelated = credential
+    unrelated.storedID = "other-row"; unrelated.key = "other-access"; unrelated.refresh = "other-refresh"
+    scenario.set([credential, unrelated])
+    try await restarted.refresh(accountIDs: [])
+    let other = try #require(await restarted.snapshot().accounts.first { $0.id != restored.id })
+    #expect(other.identityColorIndex != 4)
+    scenario.set([credential], database: "other-database")
+    try await restarted.refresh(accountIDs: [])
+    #expect(await restarted.snapshot().accounts.first?.identityColorIndex == 0)
+    await restarted.shutdown()
+}
+
 @Test func oauthContinuityAndCommandEvidenceRemainConservative() async throws {
     let scenario = InventoryScenario()
     let owner = TallyOwner(clock: { Date() }, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "Only Go collects in this slice.") })
@@ -1090,7 +1130,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(scenario.count("a") == 2)
 }
 
-@Test func pacingBoundariesAndRetryAfterParsing() throws {
+@Test @MainActor func pacingBoundariesAndRetryAfterParsing() throws {
     let now = Date(timeIntervalSince1970: 1_900_000_000)
     func window(duration: Double?, elapsed: Double, used: Double? = 20) -> QuotaWindow {
         QuotaWindow(id: "quota", label: "Quota", cadence: "other", durationSeconds: duration, durationSource: duration == nil ? "unknown" : "provider",
@@ -1100,19 +1140,31 @@ private final class SchedulingScenario: @unchecked Sendable {
         var early = window(duration: duration, elapsed: minimum - 0.001)
         early.derive(at: now, groupStale: false)
         #expect(early.pacing == nil)
+        #expect(QuotaRow(window: early, now: now).limitDate == nil)
         var exact = window(duration: duration, elapsed: minimum)
         exact.derive(at: now, groupStale: false)
         #expect(exact.pacing?.projectedUsedPercent == 20 * duration / minimum)
         #expect(exact.pacing!.sparePercent < 0 && exact.pacing!.runOutAt! < exact.resetAt!)
+        #expect(QuotaRow(window: exact, now: now).limitDate == exact.pacing?.runOutAt)
     }
     var lasts = window(duration: 1_000, elapsed: 500, used: 10)
     lasts.derive(at: now, groupStale: false)
     #expect(lasts.pacing?.projectedUsedPercent == 20 && lasts.pacing?.sparePercent == 80)
     #expect(lasts.pacing?.runOutAt == nil && lasts.pacing?.runOutReason != nil)
+    #expect(QuotaRow(window: lasts, now: now).limitDate == nil)
+    for used in [4.0, 5.0] {
+        var nearEmpty = window(duration: 18_000, elapsed: 180, used: used)
+        nearEmpty.derive(at: now, groupStale: false)
+        #expect(nearEmpty.pacing?.runOutAt != nil)
+        #expect((QuotaRow(window: nearEmpty, now: now).limitDate != nil) == (used >= 5))
+        nearEmpty.derive(at: now, groupStale: true)
+        #expect(QuotaRow(window: nearEmpty, now: now).limitDate == nil)
+    }
     for var invalid in [window(duration: nil, elapsed: 500), window(duration: 0, elapsed: 0), window(duration: 1_000, elapsed: -1),
                         window(duration: 1_000, elapsed: 1_000), window(duration: 1_000, elapsed: 500, used: 0), window(duration: 1_000, elapsed: 500, used: nil)] {
         invalid.derive(at: now, groupStale: false)
         #expect(invalid.pacing == nil && invalid.pacingUnavailableReason != nil)
+        #expect(QuotaRow(window: invalid, now: now).limitDate == nil)
     }
     #expect(GoUsage.retryAfter("3600", at: now) == now.addingTimeInterval(3_600))
     #expect(GoUsage.retryAfter("Wed, 21 Oct 2037 07:28:00 GMT", at: now) != nil)

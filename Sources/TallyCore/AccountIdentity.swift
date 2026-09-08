@@ -32,6 +32,7 @@ struct InventoryNamespace: Codable {
     var initialized = false
     var observedAt: Date?
     var nextColors: [String: Int] = [:]
+    var colorsByCredential: [String: Int]? = nil
     var records: [IdentityRecord] = []
     var activity: [String: Group<ActivityData>]? = nil
 }

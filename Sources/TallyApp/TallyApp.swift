@@ -320,38 +320,8 @@ struct AccountCard: View {
                 Rectangle().stroke(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(height: 4)
                 Text(account.groups.quotas.observedAt == nil ? "Quota unavailable" : "No quota windows reported").font(.caption)
             }
-            ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .firstTextBaseline) {
-                        if index == 0 && window.durationSeconds != nil {
-                            Text(percent(window.remainingPercent)).font(.system(size: 30, weight: .semibold))
-                            Text("\(window.label) remaining").font(.caption)
-                            Spacer(minLength: 0)
-                            if let timing = timing(window) {
-                                Text(timing).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-                            }
-                        } else {
-                            Text(window.label).font(.subheadline)
-                            Spacer()
-                            Text(percent(window.remainingPercent)).font(.subheadline.weight(.semibold))
-                        }
-                    }
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Rectangle().fill(.secondary.opacity(0.15))
-                            if let remaining = window.remainingPercent { Rectangle().fill(.primary).frame(width: geometry.size.width * remaining / 100) }
-                        }
-                    }.frame(height: 4)
-                        .overlay {
-                            if window.durationSeconds == nil || window.remainingPercent == nil {
-                                Rectangle().strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                            }
-                        }
-                        .accessibilityLabel("\(percent(window.remainingPercent)) remaining")
-                    if !(index == 0 && window.durationSeconds != nil), let timing = timing(window) {
-                        Text(timing).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+            ForEach(windows) { window in
+                QuotaRow(window: window)
             }
             if account.provider == "anthropic" || account.provider == "xai" {
                 let extra = account.groups.extraUsage
@@ -395,7 +365,6 @@ struct AccountCard: View {
         }
         return reasons.joined(separator: "\n")
     }
-    private func percent(_ number: Double?) -> String { number.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "?" }
     private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
     private func extraLabel(_ extra: ExtraUsage?) -> String {
         switch extra?.presentation {
@@ -405,32 +374,17 @@ struct AccountCard: View {
         default: "Unavailable"
         }
     }
-    private func timing(_ window: QuotaWindow) -> String? {
-        guard let reset = window.resetAt else { return nil }
-        let duration = window.durationSeconds == nil ? "Duration unknown. " : ""
-        if window.resetState == "passed" { return duration + "Reset time passed; awaiting update" }
-        let remaining = reset.timeIntervalSinceNow
-        guard remaining > 0 else { return duration + "Reset time passed; awaiting update" }
-        let minutes = Int(ceil(remaining / 60))
-        let hours = minutes / 60
-        if minutes >= 1440 {
-            let days = minutes / 1440
-            let remainingHours = hours % 24
-            return duration + "Resets in \(days)d \(remainingHours)h"
-        }
-        let remainingMinutes = minutes % 60
-        return duration + "Resets in \(hours)h \(remainingMinutes)m"
-    }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let runtime = Runtime()
     private var item: NSStatusItem!
     private let popover = NSPopover()
     private var pins: NSHostingView<MenuPins>!
     private var subscription: AnyCancellable?
     private var settingsWindow: NSWindow?
+    private var outsideClickMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         pins = NSHostingView(rootView: MenuPins(runtime: runtime))
@@ -442,6 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         item.button?.target = self; item.button?.action = #selector(togglePopover)
         popover.behavior = .transient
+        popover.delegate = self
         popover.animates = false
         popover.contentViewController = NSHostingController(rootView: Dashboard(runtime: runtime, showSettings: { [weak self] in self?.showSettings() }))
         runtime.start()
@@ -480,6 +435,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationDidResignActive(_ notification: Notification) {
         popover.performClose(nil)
+    }
+    func popoverDidShow(_ notification: Notification) {
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            self?.popover.close()
+        }
+    }
+    func popoverDidClose(_ notification: Notification) {
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        outsideClickMonitor = nil
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task { await runtime.stop(); sender.reply(toApplicationShouldTerminate: true) }

@@ -26,8 +26,38 @@ func groupDetailRows<Value>(_ label: String, _ group: TallyCore.Group<Value>) ->
 
 struct AccountDetails: View {
     let account: Account
-    var body: some View { DetailRows(rows: rows) }
-    private var rows: [(String, String)] {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Divider()
+            let groups = account.groups
+            let errors = [groups.plan.error, groups.quotas.error, groups.extraUsage.error, groups.balances.error, groups.resetSummary.error, groups.resetDetails.error].compactMap { $0?.message }
+            ForEach(Array(Set(errors)).sorted(), id: \.self) { error in
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption)
+            }
+            ForEach(account.overviewWindows.filter { $0.resetAt != nil || $0.pacing != nil }) { window in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(window.label).font(.caption.weight(.semibold))
+                    if let reset = window.resetAt {
+                        DetailRows(rows: [("Resets", reset.formatted(date: .abbreviated, time: .shortened))])
+                    }
+                    if let pacing = window.pacing {
+                        if let runOut = pacing.runOutAt {
+                            DetailRows(rows: [("At current pace", "Runs out \(runOut.formatted(date: .abbreviated, time: .shortened))")])
+                        } else {
+                            DetailRows(rows: [("At current pace", "Lasts through reset")])
+                        }
+                    }
+                }
+            }
+            if account.overviewWindows.contains(where: { $0.pacing != nil }) {
+                Text("Pacing estimates assume your average usage rate continues.").font(.caption).foregroundStyle(.secondary)
+            }
+            DisclosureGroup("Technical details") {
+                DetailRows(rows: technicalRows).padding(.top, 8)
+            }.font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var technicalRows: [(String, String)] {
         let groups = account.groups
         var rows = [("Mac timezone", TimeZone.current.identifier)]
         rows += groupDetailRows("Plan", groups.plan)
@@ -48,8 +78,8 @@ struct AccountDetails: View {
                      ("Observed used", window.usedPercent.map { "\($0.formatted())%" } ?? "?"),
                      ("Exact reset", window.resetAt?.formatted(date: .abbreviated, time: .standard) ?? (window.resetState == "not_started" ? "Not started" : "Unavailable"))]
             if let pacing = window.pacing {
-                rows += [("Projected at reset", "\(pacing.projectedUsedPercent.formatted())%"),
-                         ("Spare allowance", "\(pacing.sparePercent.formatted())%"),
+                rows += [("Projected at reset", "\(pacing.projectedUsedPercent.formatted(.number.precision(.fractionLength(0))))%"),
+                          ("Spare allowance", "\(pacing.sparePercent.formatted(.number.precision(.fractionLength(0))))%"),
                          ("Average-rate run-out", pacing.runOutAt?.formatted(date: .abbreviated, time: .standard) ?? pacing.runOutReason ?? "Unavailable")]
             } else { rows.append(("Pacing", window.pacingUnavailableReason ?? "Unavailable")) }
         }
