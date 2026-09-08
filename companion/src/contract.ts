@@ -87,7 +87,7 @@ export const Redemption = object({
   providerResult: object({ code: text, windowsReset: nullableNumber }).nullable(), error: Fault.nullable(),
   acknowledgementRequired: flag, acknowledgedAt: nullableText, resultUrl: text,
 })
-const operationId = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'Use the original operation UUID')
+const operationId = z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, 'Use the original operation UUID')
 // Anthropic requires an object root; action-specific field pairing is checked during execution.
 export const Input = z.strictObject({
   action: z.enum(['status', 'accounts', 'activity', 'refresh', 'redeem', 'redemption', 'acknowledge']),

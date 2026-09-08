@@ -244,11 +244,19 @@ test('lost mutation responses read only the original UUID; missing lookup retain
         const tally = createTally({ baseURL: `http://127.0.0.1:${address.port}` })
         const result = await tally.execute(action === 'redeem' ? { action, accountId: 'opaque', operationId } : { action, operationId })
         assert.equal(result.output.ok, recovered)
-        if (result.output.ok) assert.deepEqual(result.output.data, operations[1])
+        if (result.output.ok) {
+          assert.deepEqual(result.output.data, operations[1])
+          if (action === 'acknowledge') {
+            assert.equal(result.output.data.acknowledgedAt, null)
+            assert.equal(result.output.data.acknowledgementRequired, true)
+            assert.match(tally.description, /null acknowledgedAt means acknowledgement is not confirmed by this read/)
+          }
+        }
         else {
           assert.equal(result.output.error.code, 'operation_response_unknown')
           assert(result.output.error.message.includes(operationId))
           assert.match(result.output.error.message, /uncertain/)
+          assert(result.output.error.message.includes(`${action}: app_unavailable, lookup: operation_not_found`))
         }
         assert.equal(requests.length, 3)
         assert.equal(requests.filter(request => request.method === 'POST').length, 1)
@@ -259,7 +267,18 @@ test('lost mutation responses read only the original UUID; missing lookup retain
 })
 
 test('reset inputs reject invalid UUIDs and app/version failure prevents mutation', async () => {
+  const schema = z.toJSONSchema(Input)
+  const patterns = schema.anyOf?.flatMap(variant => typeof variant !== 'boolean' && variant.properties?.operationId && typeof variant.properties.operationId !== 'boolean' ? [variant.properties.operationId.pattern!] : [])
+  assert.equal(patterns?.length, 3)
+  for (const pattern of patterns!) {
+    assert(new RegExp(pattern).test(operationId))
+    assert(new RegExp(pattern).test(operationId.toLowerCase()))
+    assert.equal(new RegExp(pattern).test('replacement'), false)
+  }
   for (const action of ['redeem', 'redemption', 'acknowledge'] as const) {
+    for (const uuid of [operationId, operationId.toLowerCase()]) {
+      assert(Input.safeParse(action === 'redeem' ? { action, accountId: 'opaque', operationId: uuid } : { action, operationId: uuid }).success)
+    }
     assert.equal(Input.safeParse({ action, operationId: 'replacement' }).success, false)
     await serve(async (baseURL, requests) => {
       const result = await createTally({ baseURL }).execute(action === 'redeem' ? { action, accountId: 'opaque', operationId } : { action, operationId })
