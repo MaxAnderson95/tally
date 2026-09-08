@@ -268,13 +268,11 @@ test('lost mutation responses read only the original UUID; missing lookup retain
 
 test('reset inputs reject invalid UUIDs and app/version failure prevents mutation', async () => {
   const schema = z.toJSONSchema(Input)
-  const patterns = schema.anyOf?.flatMap(variant => typeof variant !== 'boolean' && variant.properties?.operationId && typeof variant.properties.operationId !== 'boolean' ? [variant.properties.operationId.pattern!] : [])
-  assert.equal(patterns?.length, 3)
-  for (const pattern of patterns!) {
-    assert(new RegExp(pattern).test(operationId))
-    assert(new RegExp(pattern).test(operationId.toLowerCase()))
-    assert.equal(new RegExp(pattern).test('replacement'), false)
-  }
+  const uuidSchema = schema.properties?.operationId
+  assert(uuidSchema && typeof uuidSchema !== 'boolean' && uuidSchema.pattern)
+  assert(new RegExp(uuidSchema.pattern).test(operationId))
+  assert(new RegExp(uuidSchema.pattern).test(operationId.toLowerCase()))
+  assert.equal(new RegExp(uuidSchema.pattern).test('replacement'), false)
   for (const action of ['redeem', 'redemption', 'acknowledge'] as const) {
     for (const uuid of [operationId, operationId.toLowerCase()]) {
       assert(Input.safeParse(action === 'redeem' ? { action, accountId: 'opaque', operationId: uuid } : { action, operationId: uuid }).success)
