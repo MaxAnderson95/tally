@@ -7,6 +7,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
   const quota = account.groups.quotas
   const windows = overviewWindows(account)
   const extra = account.groups.extraUsage
+  const extraLabel = account.provider === 'xai' ? 'PAYG' : 'Extra usage'
   const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   return <article className="account">
@@ -25,13 +26,13 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       </div>
       <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>
     </section>)}
-    {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={account.provider === 'xai' ? 'PAYG' : 'Extra usage'}>
-      <div className="window-heading"><span>{account.provider === 'xai' ? 'PAYG' : 'Extra usage'}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
+    {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={extraLabel}>
+      <div className="window-heading"><span>{extraLabel}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
       {extra.data?.presentation === 'bounded' && <>
         <div className="bar" aria-label={`${percentage(extra.data.remainingPercent)} remaining`}><div style={{ width: `${extra.data.remainingPercent}%` }} /></div>
         <p className="timing">{moneyLabel(extra.data.used)} used of {moneyLabel(extra.data.limit)}</p>
       </>}
-      {(disconnected || groupIsStale(extra)) && <p className="timing">Extra usage stale</p>}
+      {(disconnected || groupIsStale(extra)) && <p className="timing">{extraLabel} stale</p>}
     </section>}
     {account.provider === 'openai' && <>
       <section className="quota" aria-label="Purchased credits">
@@ -80,12 +81,12 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
         <dt>Plan observed</dt><dd>{exact(account.groups.plan.observedAt)}</dd>
         <dt>Plan collection</dt><dd>{account.groups.plan.refreshing ? 'Refreshing' : groupIsStale(account.groups.plan) ? 'Stale' : 'Current'}</dd>
         {account.groups.plan.error && <><dt>Plan error</dt><dd>{account.groups.plan.error.message}</dd></>}
-        <dt>Extra usage observed</dt><dd>{exact(extra.observedAt)}</dd>
-        <dt>Extra usage attempt</dt><dd>{exact(extra.lastAttemptAt)}</dd>
-        <dt>Extra usage next</dt><dd>{exact(extra.nextAttemptAt)}</dd>
-        <dt>Extra usage collection</dt><dd>{extra.refreshing ? 'Refreshing' : disconnected || groupIsStale(extra) ? 'Stale' : 'Current'}</dd>
-        {extra.error && <><dt>Extra usage error</dt><dd>{extra.error.message}</dd></>}
-        <dt>Extra usage source</dt><dd>{extra.data?.used ? `${extra.data.used.source.amount} ${extra.data.used.source.unit}; exponent ${extra.data.used.source.exponent ?? 'unknown'}` : 'Unavailable'}</dd>
+        <dt>{extraLabel} observed</dt><dd>{exact(extra.observedAt)}</dd>
+        <dt>{extraLabel} attempt</dt><dd>{exact(extra.lastAttemptAt)}</dd>
+        <dt>{extraLabel} next</dt><dd>{exact(extra.nextAttemptAt)}</dd>
+        <dt>{extraLabel} collection</dt><dd>{extra.refreshing ? 'Refreshing' : disconnected || groupIsStale(extra) ? 'Stale' : 'Current'}</dd>
+        {extra.error && <><dt>{extraLabel} error</dt><dd>{extra.error.message}</dd></>}
+        <dt>{extraLabel} source</dt><dd>{extra.data?.used ? `${extra.data.used.source.amount} ${extra.data.used.source.unit}; exponent ${extra.data.used.source.exponent ?? 'unknown'}` : 'Unavailable'}</dd>
       </>}
       {windows.map(window => <div className="detail-window" key={window.id}>
         <dt>{window.label} scope</dt><dd>{window.scopeNote ?? window.scope}</dd>

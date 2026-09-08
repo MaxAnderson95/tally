@@ -78,6 +78,7 @@ private final class GrokProtocol: URLProtocol, @unchecked Sendable {
     try await owner.refresh(); await owner.waitForCollection()
     let account = try #require(await owner.snapshot().accounts.first)
     #expect(account.groups.plan.error?.code == "provider_unavailable")
+    #expect(account.groups.plan.error?.message == "Grok request failed (HTTP 401).")
     #expect(account.groups.plan.data == nil)
     #expect(!account.groups.quotas.stale && !account.groups.extraUsage.stale)
     #expect(account.groups.extraUsage.data?.presentation == "bounded")

@@ -26,8 +26,9 @@ struct GrokUsage: Sendable {
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "Grok returned no HTTP response.") }
         guard http.statusCode == 200 else {
             // Optional settings access can be rejected while the same token still reads billing.
-            var fault = Fault(http.statusCode == 401 && endpoint == Self.endpoint ? "credentials_rejected" : "provider_unavailable",
-                              "Grok request failed (HTTP \(http.statusCode)). Check the Account in OpenCode.")
+            let rejected = http.statusCode == 401 && endpoint == Self.endpoint
+            var fault = Fault(rejected ? "credentials_rejected" : "provider_unavailable",
+                              "Grok request failed (HTTP \(http.statusCode))." + (rejected ? " Check the Account in OpenCode." : ""))
             fault.retryAt = GoUsage.retryAfter(http.value(forHTTPHeaderField: "Retry-After"), at: Date())
             throw fault
         }

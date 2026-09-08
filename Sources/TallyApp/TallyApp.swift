@@ -173,6 +173,7 @@ struct Dashboard: View {
 struct AccountCard: View {
     let account: Account
     var body: some View {
+        let extraTitle = account.provider == "xai" ? "PAYG" : "Extra usage"
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 if account.provider == "opencode-go" {
@@ -223,7 +224,7 @@ struct AccountCard: View {
                 let extra = account.groups.extraUsage
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(account.provider == "xai" ? "PAYG" : "Extra usage")
+                        Text(extraTitle)
                         Spacer()
                         Text(extraLabel(extra.data)).multilineTextAlignment(.trailing)
                     }.font(.subheadline)
@@ -236,7 +237,7 @@ struct AccountCard: View {
                         }.frame(height: 4)
                         Text("\(money(data.used)) used of \(money(data.limit))").font(.caption)
                     }
-                    if extra.stale { Text("Extra usage stale").font(.caption) }
+                    if extra.stale { Text("\(extraTitle) stale").font(.caption) }
                 }
             }
             if account.provider == "openai" { OpenAICreditDetails(account: account) }
@@ -252,13 +253,13 @@ struct AccountCard: View {
                         GridRow { Text("Plan observed"); Text(account.groups.plan.observedAt?.formatted() ?? "Never") }
                         GridRow { Text("Plan collection"); Text(account.groups.plan.refreshing ? "Refreshing" : account.groups.plan.stale ? "Stale" : "Current") }
                         if let error = account.groups.plan.error { GridRow { Text("Plan error"); Text(error.message) } }
-                        GridRow { Text("Extra usage observed"); Text(account.groups.extraUsage.observedAt?.formatted() ?? "Never") }
-                        GridRow { Text("Extra usage attempt"); Text(account.groups.extraUsage.lastAttemptAt?.formatted() ?? "Never") }
-                        GridRow { Text("Extra usage next"); Text(account.groups.extraUsage.nextAttemptAt?.formatted() ?? "Not scheduled") }
-                        GridRow { Text("Extra usage collection"); Text(account.groups.extraUsage.refreshing ? "Refreshing" : account.groups.extraUsage.stale ? "Stale" : "Current") }
-                        if let error = account.groups.extraUsage.error { GridRow { Text("Extra usage error"); Text(error.message) } }
+                        GridRow { Text("\(extraTitle) observed"); Text(account.groups.extraUsage.observedAt?.formatted() ?? "Never") }
+                        GridRow { Text("\(extraTitle) attempt"); Text(account.groups.extraUsage.lastAttemptAt?.formatted() ?? "Never") }
+                        GridRow { Text("\(extraTitle) next"); Text(account.groups.extraUsage.nextAttemptAt?.formatted() ?? "Not scheduled") }
+                        GridRow { Text("\(extraTitle) collection"); Text(account.groups.extraUsage.refreshing ? "Refreshing" : account.groups.extraUsage.stale ? "Stale" : "Current") }
+                        if let error = account.groups.extraUsage.error { GridRow { Text("\(extraTitle) error"); Text(error.message) } }
                         if let used = account.groups.extraUsage.data?.used {
-                            GridRow { Text("Extra usage source"); Text("\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")") }
+                            GridRow { Text("\(extraTitle) source"); Text("\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")") }
                         }
                     }
                     ForEach(windows) { window in
