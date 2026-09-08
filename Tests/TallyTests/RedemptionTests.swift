@@ -326,8 +326,8 @@ func redemptionRechecksTargetAfterPreflight(change: String) async throws {
     let next = UUID().uuidString
     _ = try await owner.submitRedemption(accountID: account, operationID: next)
     await owner.waitForRedemptions()
-    #expect(try await owner.redemption(operationID: next).error?.code == "provider_cooldown")
-    #expect(scenario.calls().count == 2)
+    #expect(try await owner.redemption(operationID: next).state == .confirmed)
+    #expect(scenario.calls().map(\.httpMethod) == ["GET", "POST", "GET", "POST"])
     await owner.shutdown()
 
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -346,6 +346,49 @@ func redemptionRechecksTargetAfterPreflight(change: String) async throws {
     #expect(try await restarted.redemption(operationID: operation).error?.retryAt == cooling.now.addingTimeInterval(3600))
     #expect(cooling.calls().isEmpty)
     await restarted.shutdown()
+}
+
+@Test(arguments: ["completed", "running", "cooldown", "rejected", "removal", "shutdown"])
+func redemptionJoinsRoutineCreditCollectionWithoutRefreshDebounce(outcome: String) async throws {
+    let scenario = ResetScenario()
+    let gate = ResetGate()
+    let (entered, signal) = AsyncStream<Bool>.makeStream()
+    let owner = scenario.owner(quitWait: .milliseconds(40), collections: { _ in
+        [CollectionJob(id: "reset-credits", groups: [.resetDetails]) {
+            signal.yield(true); signal.finish(); await gate.wait()
+            if outcome == "cooldown" {
+                var fault = Fault("provider_unavailable", "Synthetic cooldown")
+                fault.retryAt = scenario.now.addingTimeInterval(3600)
+                throw fault
+            }
+            if outcome == "rejected" { throw Fault("credentials_rejected", "Synthetic rejection") }
+            return [.resetDetails(nil)]
+        }]
+    })
+    try await owner.refresh()
+    #expect(await entered.first(where: { _ in true }) == true)
+    let account = try #require(await owner.snapshot().accounts.first?.id)
+    if outcome == "completed" { await gate.open(); await owner.waitForCollection() }
+    let id = UUID().uuidString
+    _ = try await owner.submitRedemption(accountID: account, operationID: id)
+    if outcome != "completed" {
+        #expect(try await owner.redemption(operationID: id).state == .pending)
+        #expect(scenario.calls().isEmpty)
+    }
+    if outcome == "removal" { scenario.replace([]) }
+    if outcome == "shutdown" { await owner.shutdown() }
+    await gate.open(); await owner.waitForCollection(); await owner.waitForRedemptions()
+    let result = try await owner.redemption(operationID: id)
+    if outcome == "completed" || outcome == "running" {
+        #expect(result.state == .confirmed)
+        #expect(scenario.calls().map(\.httpMethod) == ["GET", "POST"])
+    } else {
+        #expect(result.state == .failed)
+        #expect(scenario.calls().isEmpty)
+        if outcome == "cooldown" { #expect(result.error?.retryAt == scenario.now.addingTimeInterval(3600)) }
+        if outcome == "rejected" || outcome == "removal" { #expect(result.error?.code == "credentials_unavailable") }
+    }
+    await owner.shutdown()
 }
 
 @Test(arguments: [false, true])

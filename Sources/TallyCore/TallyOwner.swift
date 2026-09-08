@@ -558,14 +558,17 @@ public actor TallyOwner {
         var credential: StoredCredential?
         do {
             try Task.checkCancellation()
+            let key = JobKey(account: accountID, job: "reset-credits")
+            // Join an existing read, then verify its resulting backoff and current identity.
+            await tasks[key]?.value
+            try Task.checkCancellation()
+            guard redemptions.records[id]?.result.state == .pending else { return }
             let current = try currentRedemptionCredential(record)
             credential = current
-            let key = JobKey(account: accountID, job: "reset-credits")
-            if tasks[key] != nil { throw Fault("provider_cooldown", "Credit collection is already running. This command will not queue a later spend.") }
             var policy = attempts[accountID]?[key.job] ?? AttemptPolicy()
-            if let decision = policy.decision(at: clock(), automatic: false) {
+            if let deadline = policy.cooldownUntil, deadline > clock() {
                 var fault = Fault("provider_cooldown", "Credit preflight is deferred. This command will not queue a later spend.")
-                fault.retryAt = decision.nextAttemptAt
+                fault.retryAt = deadline
                 throw fault
             }
             policy.start(at: clock()); attempts[accountID, default: [:]][key.job] = policy
