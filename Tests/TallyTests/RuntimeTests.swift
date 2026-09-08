@@ -3,11 +3,32 @@ import Testing
 import CSQLite
 import AppKit
 import SwiftUI
+import ServiceManagement
 @testable import TallyCore
 @testable import TallyApp
 
 func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!)
+}
+
+@Test @MainActor func loginApprovalStatusRefreshPreservesRegistrationErrors() {
+    let runtime = Runtime(owner: ResetScenario().owner())
+    runtime.readLoginStatus(.requiresApproval)
+    #expect(runtime.loginEnabled)
+    #expect(runtime.loginMessage != nil)
+    runtime.readLoginStatus(.enabled)
+    #expect(runtime.loginEnabled)
+    #expect(runtime.loginMessage == nil)
+    runtime.readLoginStatus(.requiresApproval)
+    runtime.readLoginStatus(.notRegistered)
+    #expect(!runtime.loginEnabled)
+    #expect(runtime.loginMessage == nil)
+    let error = "Launch at login could not be changed: synthetic failure"
+    runtime.loginMessage = error
+    for status in [SMAppService.Status.requiresApproval, .enabled, .notRegistered, .notFound] {
+        runtime.readLoginStatus(status)
+        #expect(runtime.loginMessage == error)
+    }
 }
 
 @Test @MainActor func nativePresentationReference() throws {

@@ -17,7 +17,9 @@ Requires Apple Silicon macOS 26+, Swift 6.3, and Node 22.12+ on the build machin
 
 ```sh
 bash scripts/build-app.sh
-open build/Tally.app
+mkdir -p "$HOME/Applications"
+ditto build/Tally.app "$HOME/Applications/Tally.app"
+open "$HOME/Applications/Tally.app"
 ```
 
 Copy the complete app to `~/Applications/Tally.app` before first setup. First launch registers that main app for launch at login; Settings can disable it or open macOS Login Items when approval is required. No helper is installed. See [installation and update instructions](docs/INSTALLATION.md) and [assembled verification](docs/verification/installation.md) for tested behavior and remaining physical/tailnet checks.

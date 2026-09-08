@@ -68,10 +68,12 @@ final class Runtime: ObservableObject {
         }
     }
 
-    func readLoginStatus() {
-        let status = SMAppService.mainApp.status
+    func readLoginStatus(_ status: SMAppService.Status = SMAppService.mainApp.status) {
+        let approvalMessage = "Allow Tally in System Settings > General > Login Items."
         loginEnabled = status == .enabled || status == .requiresApproval
-        if status == .requiresApproval { loginMessage = "Allow Tally in System Settings > General > Login Items." }
+        if status == .requiresApproval {
+            if loginMessage == nil { loginMessage = approvalMessage }
+        } else if loginMessage == approvalMessage { loginMessage = nil }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -242,6 +244,8 @@ struct Dashboard: View {
                 }
                 if settings {
                     Toggle("Launch at login", isOn: Binding(get: { runtime.loginEnabled }, set: { runtime.setLaunchAtLogin($0) }))
+                        .onAppear { runtime.readLoginStatus() }
+                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in runtime.readLoginStatus() }
                     if let message = runtime.loginMessage {
                         Text(message).font(.caption)
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
