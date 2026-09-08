@@ -4,6 +4,17 @@ import CSQLite
 struct OpenCodeActivity: Sendable {
     var path: String
 
+    func scan(cutoff: Date) async throws -> ActivityScan {
+        let task = Task.detached { try read(cutoff: cutoff) }
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     func read(cutoff: Date) throws -> ActivityScan {
         let source = OpenCodeInventory(path: path)
         let identity = try source.databaseIdentity()
@@ -28,7 +39,7 @@ struct OpenCodeActivity: Sendable {
               SELECT 1 FROM session_message b
               WHERE b.session_id = s.fork_session_id AND b.id = json_extract(s.fork_boundary, '$.messageID')
                 AND ((json_extract(s.fork_boundary, '$.type') = 'before' AND m.seq < b.seq)
-                  OR (json_extract(s.fork_boundary, '$.type') = 'after' AND m.seq <= b.seq))
+                  OR (json_extract(s.fork_boundary, '$.type') = 'through' AND m.seq <= b.seq))
             )
           ))
         ORDER BY m.time_created, m.id

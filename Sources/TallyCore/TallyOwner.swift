@@ -41,7 +41,7 @@ public actor TallyOwner {
             default: []
             }
         }
-        scanActivity = { cutoff in try await Task.detached { try OpenCodeActivity(path: databasePath).read(cutoff: cutoff) }.value }
+        scanActivity = { cutoff in try await OpenCodeActivity(path: databasePath).scan(cutoff: cutoff) }
         timezone = { TimeZone.current }
         clock = { Date() }
         self.appBuild = appBuild
@@ -99,7 +99,7 @@ public actor TallyOwner {
         let source = OpenCodeInventory(path: path)
         inventorySource = { try source.read() }
         identifySource = { try source.databaseIdentity() }
-        scanActivity = { cutoff in try await Task.detached { try OpenCodeActivity(path: path).read(cutoff: cutoff) }.value }
+        scanActivity = { cutoff in try await OpenCodeActivity(path: path).scan(cutoff: cutoff) }
         if (try? source.databaseIdentity()) != databaseIdentity { leaveNamespace() }
         try refresh(accountIDs: [])
     }
