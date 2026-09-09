@@ -17,6 +17,12 @@ open "$HOME/Applications/Tally.app"
 
 The script installs the web lockfile, typechecks/builds the SPA, builds arm64 release Swift, packages both resource bundles and Web, and ad-hoc signs the result. `CFBundleVersion` includes the source commit and UTC packaging timestamp so rebuilding an uncommitted checkout also changes browser build identity. `Package.resolved`, `web/package-lock.json`, and `companion/package-lock.json` pin dependencies. No release is published by this script.
 
+## GitHub releases
+
+Pushing a SemVer tag such as `v1.2.3` or `1.2.3` runs `.github/workflows/release.yml`. Prerelease and build metadata suffixes are supported; prerelease tags such as `v1.2.3-rc.1` create GitHub prereleases. GitHub's tag filters match candidate tags, and the workflow rejects invalid SemVer before building.
+
+The macOS 26 job uses Xcode 26.6 and Node 22 to run the app build script, set the bundle's short version to the tag's numeric version, re-sign and verify the app, and archive it with `ditto`. A separate Ubuntu job downloads the archive and creates a GitHub release with generated notes and a `Tally-<tag>-macos-arm64.zip` asset. Only the release job has repository write permission. Release builds retain ad-hoc signing and require Apple Silicon and macOS 26 or newer.
+
 ## First launch and settings
 
 First launch saves loopback port 7483 and registers the main app with macOS ServiceManagement for launch at login. Settings shows the current login-item state and can disable it. If macOS requires approval, follow the displayed Login Items link. Registration failure remains visible and setup retries on next launch. Collection and HTTP run independently of the popover. Closing it leaves both running; Quit rejects commands, bounds redemption waiting to 15 seconds, and awaits HTTP shutdown. After a crash, reopen the app manually.
@@ -33,7 +39,7 @@ On Max's Mac, the rootless Tailscale CLI uses `--socket="$HOME/.config/tailscale
 
 ## Download approval and replacement
 
-This personal app has ad-hoc signing, without Developer ID or notarization. For an eventual downloaded release, extract it, copy the complete app to `~/Applications`, and try opening it. If Gatekeeper blocks it, use System Settings > Privacy & Security > Open Anyway and approve that specific app. Download/quarantine approval still needs a physical check; the tested bundle was built locally.
+This personal app has ad-hoc signing, without Developer ID or notarization. For a downloaded release, extract it, copy the complete app to `~/Applications`, and try opening it. If Gatekeeper blocks it, use System Settings > Privacy & Security > Open Anyway and approve that specific app. Download/quarantine approval still needs a physical check; the tested bundle was built locally.
 
 For an update, Quit Tally and replace the complete `Tally.app` at the same installed path, then open it. Do not replace only the executable or Web directory. Keep `~/Library/Application Support/Tally` and app preferences: these retain identity/pins, readings, stable port and durable command history. Browsers reload when the returned app-build identity changes. Refresh or open the page again if the app is unavailable during replacement. The companion is separately packed and installed according to `companion/README.md`; API major 1 accepts additive fields and does not require matching release numbers.
 
