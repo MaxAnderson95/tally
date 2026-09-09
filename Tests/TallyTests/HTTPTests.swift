@@ -106,7 +106,7 @@ private struct AuthorityResponder: HTTPResponder {
             #expect(response.status == .methodNotAllowed)
         }
         let colorPath = "/api/v1/accounts/\(initial.accounts[0].id)/color"
-        for path in [colorPath, "/api/v1/pins"] {
+        for path in [colorPath, "/api/v1/pins", "/api/v1/unpinned-order"] {
             try await client.execute(uri: path, method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json", .origin: "https://evil.example"], body: .init(string: "{}")) { response in
                 #expect(response.status == .forbidden)
             }
@@ -147,6 +147,14 @@ private struct AuthorityResponder: HTTPResponder {
                 #expect(response.status == .badRequest)
                 #expect(await owner.snapshot().accounts.filter(\.pinned).map(\.id) == reordered)
             }
+        }
+        let unpinned = Array(await owner.snapshot().accounts.filter { !$0.pinned }.map(\.id).reversed())
+        let orderBody = String(decoding: try JSONEncoder().encode(["accountIds": unpinned]), as: UTF8.self)
+        try await client.execute(uri: "/api/v1/unpinned-order", method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"], body: .init(string: orderBody)) { response in
+            #expect(response.status == .ok)
+            let decoded = try Wire.decoder().decode(AccountsResponse.self, from: Data(response.body.readableBytesView))
+            #expect(decoded.accounts.filter { !$0.pinned }.map(\.id) == unpinned)
+            #expect(decoded.accounts.filter(\.pinned).map(\.id) == reordered)
         }
     }
 }

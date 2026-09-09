@@ -12,7 +12,7 @@ struct StoredCredential: Sendable {
     var expiresAt: Date? = nil
 
     var fingerprint: String { identityDigest(key) }
-    var colorPreferenceKey: String { identityDigest("\(provider)\u{0}\(storedID)") }
+    var preferenceKey: String { identityDigest("\(provider)\u{0}\(storedID)") }
 
     var evidence: IdentityEvidence {
         IdentityEvidence(provider: provider, workspace: workspace.map(identityDigest),

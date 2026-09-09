@@ -41,6 +41,8 @@ button:disabled { opacity: .5; cursor: default; }
 .logo, .logo svg { display: block; width: 22px; height: 22px; flex-shrink: 0; }
 .logo.identity-0 { color: var(--mono); } .logo.identity-1 { color: var(--cobalt); } .logo.identity-2 { color: var(--tangerine); } .logo.identity-3 { color: var(--moss); } .logo.identity-4 { color: var(--plum); } .logo.identity-5 { color: var(--rose); }
 .details-toggle { background: none; border: 0; padding: 0; min-width: 24px; min-height: 28px; font-size: 18px; color: var(--muted); }
+.card-chevron { display: inline-block; transform: rotate(180deg); }
+.details-toggle[aria-expanded="true"] .card-chevron { transform: none; }
 .quota + .quota { margin-top: 16px; }
 .unavailable strong { font-size: 16px; font-weight: 600; }
 .window-heading { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; gap: 10px; }

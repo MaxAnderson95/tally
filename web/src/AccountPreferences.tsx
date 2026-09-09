@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Account } from './api'
 import { ProviderLogo, providerName } from './ProviderLogo'
 
-export type PreferenceChange = { kind: 'color'; accountId: string; index: number } | { kind: 'pins'; accountIds: string[] }
+export type PreferenceChange = { kind: 'color'; accountId: string; index: number } | { kind: 'pins' | 'unpinned-order'; accountIds: string[] }
 type SavePreference = (change: PreferenceChange) => Promise<boolean>
 const colors = ['Monochrome', 'Blue', 'Orange', 'Green', 'Purple', 'Pink']
 
@@ -37,11 +37,11 @@ export function AccountPreferences({ accounts, open, close, save, disabled, erro
     else dialog.current?.close()
   }, [open])
   const pins = accounts.filter(account => account.pinned).map(account => account.id)
-  function move(index: number, direction: -1 | 1) {
-    const next = [...pins]
+  function move(account: Account, index: number, direction: -1 | 1) {
+    const next = accounts.filter(item => item.pinned === account.pinned).map(item => item.id)
     const destination = index + direction
     ;[next[index], next[destination]] = [next[destination], next[index]]
-    void save({ kind: 'pins', accountIds: next })
+    void save({ kind: account.pinned ? 'pins' : 'unpinned-order', accountIds: next })
   }
   return <dialog ref={dialog} className="preferences-dialog" onClose={close} onClick={event => { if (event.target === event.currentTarget) close() }} aria-labelledby="preferences-title">
     <div className="preferences-content">
@@ -49,13 +49,14 @@ export function AccountPreferences({ accounts, open, close, save, disabled, erro
       <p>Colors and pins are shared with Tally on your Mac. Click an icon to change its color.</p>
       {error && <p className="account-error" role="alert">{error}</p>}
       <div className="preference-accounts">{accounts.map(account => {
-        const index = pins.indexOf(account.id)
+        const siblings = accounts.filter(item => item.pinned === account.pinned)
+        const index = siblings.findIndex(item => item.id === account.id)
         const name = `${providerName(account.provider)}${accounts.some(other => other.provider === account.provider && other.id !== account.id) ? ` - ${account.name}` : ''}`
         return <div className="preference-account" key={account.id}>
           <ColorPicker account={account} save={save} disabled={disabled} /><span>{name}</span>
           <div className="pin-controls">
             <button disabled={disabled} onClick={() => void save({ kind: 'pins', accountIds: account.pinned ? pins.filter(id => id !== account.id) : [...pins, account.id] })}>{account.pinned ? 'Unpin' : 'Pin'}</button>
-            {account.pinned && <><button disabled={disabled || index === 0} aria-label={`Move ${name} earlier`} onClick={() => move(index, -1)}>↑</button><button disabled={disabled || index === pins.length - 1} aria-label={`Move ${name} later`} onClick={() => move(index, 1)}>↓</button></>}
+            <button disabled={disabled || index === 0} aria-label={`Move ${name} earlier`} onClick={() => move(account, index, -1)}>↑</button><button disabled={disabled || index === siblings.length - 1} aria-label={`Move ${name} later`} onClick={() => move(account, index, 1)}>↓</button>
           </div>
         </div>
       })}</div>

@@ -27,7 +27,7 @@ function AccountCard({ account, timezone, disconnected, inventoryError, now, sav
       <div><h2>{providerName(account.provider)}</h2><p><span className="account-alias">{account.name}</span><span>{account.groups.plan.data?.name ?? 'Plan unknown'}</span></p></div>
       {stale && <span className="quota-warning" tabIndex={0} aria-label={warning || 'Stale reading'} title={warning || 'Last-good values may be out of date'}><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg><span role="tooltip">{warning || 'Last-good values may be out of date'}</span></span>}
       {resets.warning}
-      <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}>{details ? '⌃' : '⌄'}</button>
+      <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}><span className="card-chevron" aria-hidden="true">⌃</span></button>
     </header>
     {resets.result}
     {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
@@ -152,7 +152,7 @@ function App() {
     setSaving(true)
     setPreferenceError(undefined)
     try {
-      const url = change.kind === 'color' ? `/api/v1/accounts/${encodeURIComponent(change.accountId)}/color` : '/api/v1/pins'
+      const url = change.kind === 'color' ? `/api/v1/accounts/${encodeURIComponent(change.accountId)}/color` : `/api/v1/${change.kind}`
       const body = change.kind === 'color' ? { index: change.index } : { accountIds: change.accountIds }
       const response = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) })
       if (!response.ok) { const result: { error: Fault } = await response.json(); throw new Error(result.error.message) }

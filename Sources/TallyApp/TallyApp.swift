@@ -169,17 +169,26 @@ final class Runtime: ObservableObject {
         startServer()
     }
 
-    func pin(_ account: Account, move: Int? = nil) async {
+    func pin(_ account: Account) async {
         var ids = (snapshot?.accounts ?? []).filter(\.pinned).map(\.id)
-        if let move, let index = ids.firstIndex(of: account.id) {
-            let destination = index + move
-            guard ids.indices.contains(destination) else { return }
-            ids.swapAt(index, destination)
-        } else if account.pinned { ids.removeAll { $0 == account.id } }
+        if account.pinned { ids.removeAll { $0 == account.id } }
         else { ids.append(account.id) }
         do { try await owner.setPins(ids); settingsError = nil }
         catch let fault as Fault { settingsError = fault.message }
         catch { settingsError = "Cannot save pins." }
+        snapshot = await owner.snapshot()
+    }
+
+    func move(_ account: Account, by offset: Int) async {
+        var ids = (snapshot?.accounts ?? []).filter { $0.pinned == account.pinned }.map(\.id)
+        guard let index = ids.firstIndex(of: account.id), ids.indices.contains(index + offset) else { return }
+        ids.swapAt(index, index + offset)
+        do {
+            if account.pinned { try await owner.setPins(ids) }
+            else { try await owner.setUnpinnedOrder(ids) }
+            settingsError = nil
+        } catch let fault as Fault { settingsError = fault.message }
+        catch { settingsError = "Cannot save Account order." }
         snapshot = await owner.snapshot()
     }
 
@@ -229,14 +238,12 @@ struct Dashboard: View {
                     Text("Pinned").font(.caption).foregroundStyle(.secondary)
                     ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account, runtime: runtime) }
                 }
-                if accounts.contains(where: { !$0.pinned }) {
-                    ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
-                        let others = accounts.filter { !$0.pinned && $0.provider == provider }
-                        if !others.isEmpty {
-                            Text(ProviderArtwork.logos[provider]?.name ?? provider).font(.caption).foregroundStyle(.secondary)
-                            ForEach(others) { account in AccountCard(account: account, runtime: runtime) }
-                        }
+                let unpinned = accounts.filter { !$0.pinned }
+                ForEach(Array(unpinned.enumerated()), id: \.element.id) { index, account in
+                    if index == 0 || unpinned[index - 1].provider != account.provider {
+                        Text(ProviderArtwork.logos[account.provider]?.name ?? account.provider).font(.caption).foregroundStyle(.secondary)
                     }
+                    AccountCard(account: account, runtime: runtime)
                 }
                 RecordedActivity(runtime: runtime)
                 Divider()

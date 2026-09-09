@@ -98,9 +98,18 @@ public actor TallyOwner {
             account.derivePresentation()
             return account
         }
+        let unpinnedOrder = databaseIdentity.flatMap { store.state.namespaces[$0]?.unpinnedOrder } ?? []
+        let sorted = display.sorted { lhs, rhs in
+            if !lhs.pinned && !rhs.pinned {
+                let left = credentials[lhs.id].flatMap { unpinnedOrder.firstIndex(of: $0.preferenceKey) } ?? Int.max
+                let right = credentials[rhs.id].flatMap { unpinnedOrder.firstIndex(of: $0.preferenceKey) } ?? Int.max
+                if left != right { return left < right }
+            }
+            return accountOrder(lhs, rhs)
+        }
         return AccountsResponse(status: Status(appBuild: appBuild, serverTime: now, timezone: TimeZone.current.identifier,
                                                owner: stopping ? "shutting_down" : "ready", inventory: inventory,
-                                               recoveryStorage: RecoveryStorage(available: redemptions.error == nil, error: redemptions.error)), accounts: display.sorted(by: accountOrder))
+                                               recoveryStorage: RecoveryStorage(available: redemptions.error == nil, error: redemptions.error)), accounts: sorted)
     }
 
     public func account(id: String) throws -> AccountResponse {
@@ -136,6 +145,21 @@ public actor TallyOwner {
         catch { accounts = previous; cacheAccounts(); throw error }
     }
 
+    public func setUnpinnedOrder(_ orderedIDs: [String]) throws {
+        guard Set(orderedIDs).count == orderedIDs.count, Set(orderedIDs) == Set(accounts.filter { !$0.pinned }.map(\.id)) else {
+            throw Fault("invalid_request", "Include each current unpinned Account exactly once.")
+        }
+        guard let databaseIdentity else { throw Fault("inventory_unavailable", "Current Account inventory is unavailable.") }
+        let keys = try orderedIDs.map { id in
+            guard let credential = credentials[id] else { throw Fault("inventory_unavailable", "Current Account identity is unavailable.") }
+            return credential.preferenceKey
+        }
+        let previous = store.state.namespaces[databaseIdentity]?.unpinnedOrder
+        store.state.namespaces[databaseIdentity]?.unpinnedOrder = keys
+        do { try store.save(); storageError = nil }
+        catch { store.state.namespaces[databaseIdentity]?.unpinnedOrder = previous; throw error }
+    }
+
     public func setIdentityColor(accountID: String, index: Int) throws {
         guard (0..<6).contains(index) else { throw Fault("invalid_request", "Choose one of the six Account colors.") }
         guard let position = accounts.firstIndex(where: { $0.id == accountID }) else {
@@ -160,7 +184,7 @@ public actor TallyOwner {
         if namespace.colorsByCredential == nil { namespace.colorsByCredential = [:] }
         for account in accounts {
             if let credential = credentials[account.id] {
-                namespace.colorsByCredential?[credential.colorPreferenceKey] = account.identityColorIndex
+                namespace.colorsByCredential?[credential.preferenceKey] = account.identityColorIndex
             }
         }
         for index in namespace.records.indices {
@@ -229,7 +253,7 @@ public actor TallyOwner {
             }
             account.name = credential.name
             // Cosmetic preferences follow the OpenCode row, independently of credential identity.
-            account.identityColorIndex = namespace.colorsByCredential?[credential.colorPreferenceKey] ?? account.identityColorIndex
+            account.identityColorIndex = namespace.colorsByCredential?[credential.preferenceKey] ?? account.identityColorIndex
             if let previous = credentials[account.id], previous.fingerprint != credential.fingerprint {
                 for key in tasks.keys where key.account == account.id { tasks[key]?.cancel(); tasks[key] = nil }
                 account.groups.plan.refreshing = false

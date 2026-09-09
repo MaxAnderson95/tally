@@ -728,6 +728,43 @@ private final class InventoryScenario: @unchecked Sendable {
     await restarted.shutdown()
 }
 
+@Test func unpinnedOrderSurvivesRestartAndTokenRotation() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("accounts.json")
+    let scenario = InventoryScenario()
+    var entries = ["anthropic", "openai", "opencode-go", "xai"].map {
+        StoredCredential(storedID: $0, name: $0, key: "access-\($0)", provider: $0, refresh: "refresh-\($0)")
+    }
+    scenario.set(entries)
+    let owner = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    try await owner.refresh(accountIDs: [])
+    let first = await owner.snapshot().accounts
+    let pinned = first[1].id
+    try await owner.setPins([pinned])
+    let ordered = Array(first.filter { $0.id != pinned }.reversed())
+    try await owner.setUnpinnedOrder(ordered.map(\.id))
+    #expect(await owner.snapshot().accounts.filter { !$0.pinned }.map(\.id) == ordered.map(\.id))
+    #expect(await owner.snapshot().accounts.filter(\.pinned).map(\.id) == [pinned])
+    for invalid in [[], [pinned], [ordered[0].id, ordered[0].id, ordered[1].id]] {
+        await #expect(throws: Fault.self) { try await owner.setUnpinnedOrder(invalid) }
+    }
+    await owner.shutdown()
+    entries[0].key = "rotated-access"; entries[0].refresh = "rotated-refresh"
+    scenario.set(entries)
+    let restarted = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    try await restarted.refresh(accountIDs: [])
+    let restored = await restarted.snapshot().accounts
+    #expect(restored.filter { !$0.pinned }.map(\.provider) == ordered.map(\.provider))
+    #expect(restored.filter(\.pinned).map(\.id) == [pinned])
+    try FileManager.default.removeItem(at: storage)
+    try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: false)
+    await #expect(throws: Fault.self) { try await restarted.setUnpinnedOrder(Array(restored.filter { !$0.pinned }.map(\.id).reversed())) }
+    #expect(await restarted.snapshot().accounts.map(\.id) == restored.map(\.id))
+    try FileManager.default.removeItem(at: storage)
+    await restarted.shutdown()
+}
+
 @Test func oauthContinuityAndCommandEvidenceRemainConservative() async throws {
     let scenario = InventoryScenario()
     let owner = TallyOwner(clock: { Date() }, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "Only Go collects in this slice.") })

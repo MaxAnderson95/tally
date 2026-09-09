@@ -24,14 +24,15 @@ struct TallySettings: View {
                     let provider = ProviderArtwork.logos[account.provider]?.name ?? account.provider
                     let hasMultipleAccounts = accounts.contains { $0.provider == account.provider && $0.id != account.id }
                     let label = hasMultipleAccounts ? "\(provider) - \(account.name)" : provider
+                    let siblings = accounts.filter { $0.pinned == account.pinned }
                     HStack {
                         Button(account.pinned ? "Unpin" : "Pin") { Task { await runtime.pin(account) } }
                         Text(label)
                         Spacer()
-                        if account.pinned {
-                            Button("↑") { Task { await runtime.pin(account, move: -1) } }.accessibilityLabel("Move \(label) earlier")
-                            Button("↓") { Task { await runtime.pin(account, move: 1) } }.accessibilityLabel("Move \(label) later")
-                        }
+                        Button("↑") { Task { await runtime.move(account, by: -1) } }
+                            .accessibilityLabel("Move \(label) earlier").disabled(siblings.first?.id == account.id)
+                        Button("↓") { Task { await runtime.move(account, by: 1) } }
+                            .accessibilityLabel("Move \(label) later").disabled(siblings.last?.id == account.id)
                     }
                 }
                 TextField("Loopback port", text: $runtime.port)

@@ -79,12 +79,13 @@ public struct TallyResponder: HTTPResponder {
                 try await owner.setIdentityColor(accountID: String(parts[4]), index: input.index)
                 return try json(await owner.snapshot())
             }
-            if path == "/api/v1/pins" {
-                guard request.method == .put else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use PUT to save pin order.")) }
+            if path == "/api/v1/pins" || path == "/api/v1/unpinned-order" {
+                guard request.method == .put else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use PUT to save Account ordering.")) }
                 let buffer = try await request.body.collect(upTo: 16_384)
                 struct Input: Decodable { var accountIds: [String] }
                 let input = try JSONDecoder().decode(Input.self, from: Data(buffer.readableBytesView))
-                try await owner.setPins(input.accountIds)
+                if path == "/api/v1/pins" { try await owner.setPins(input.accountIds) }
+                else { try await owner.setUnpinnedOrder(input.accountIds) }
                 return try json(await owner.snapshot())
             }
             if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "redemptions" {
