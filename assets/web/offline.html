@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+  <title>Tally · Connection unavailable</title>
+  <style>
+    :root { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #1d1d1f; background: #f5f5f7; color-scheme: light dark; }
+    body { margin: 0; }
+    main { max-width: 420px; margin: auto; padding: calc(64px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left)); }
+    h1 { font-size: 28px; letter-spacing: -1px; }
+    h2 { font-size: 20px; }
+    p { color: #6e6e73; }
+    button { font: inherit; color: inherit; background: transparent; border: 1px solid #6e6e73; border-radius: 7px; padding: 10px 20px; cursor: pointer; }
+    :focus-visible { outline: 2px solid #2456e6; outline-offset: 4px; }
+    @media (prefers-color-scheme: dark) { :root { color: #f5f5f7; background: #1c1c1e; } p { color: #a1a1a6; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Tally</h1>
+    <h2>Can't reach your Mac</h2>
+    <p>Check your internet and Tailscale connection, and make sure Tally is running on your Mac.</p>
+    <p>Usage readings and reset credits need a connection to your Mac.</p>
+    <button type="button" onclick="location.reload()">Try again</button>
+  </main>
+  <script>window.addEventListener('online', () => location.reload())</script>
+</body>
+</html>

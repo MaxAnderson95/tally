@@ -120,7 +120,8 @@ function App() {
     const visible = () => { if (!document.hidden) { setNow(Date.now()); void poll() } }
     document.addEventListener('visibilitychange', visible)
     window.addEventListener('tally:operation', visible)
-    return () => { stopped = true; controller.abort(); clearInterval(interval); document.removeEventListener('visibilitychange', visible); window.removeEventListener('tally:operation', visible) }
+    window.addEventListener('online', visible)
+    return () => { stopped = true; controller.abort(); clearInterval(interval); document.removeEventListener('visibilitychange', visible); window.removeEventListener('tally:operation', visible); window.removeEventListener('online', visible) }
   }, [])
   async function refresh() {
     setRefreshing(true)
@@ -157,3 +158,11 @@ function App() {
 }
 
 createRoot(document.getElementById('root')!).render(<App />)
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(error => {
+      console.error('Tally offline support could not be installed.', error)
+    })
+  })
+}

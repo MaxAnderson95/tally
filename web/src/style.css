@@ -8,7 +8,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; }
-main { max-width: 1200px; margin: 0 auto; padding: 32px 32px 64px; }
+main { max-width: 1200px; margin: 0 auto; padding: calc(32px + env(safe-area-inset-top)) calc(32px + env(safe-area-inset-right)) calc(64px + env(safe-area-inset-bottom)) calc(32px + env(safe-area-inset-left)); min-height: 100dvh; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 28px; letter-spacing: -1px; line-height: 1.2; }
 h2 { font-size: 17px; font-weight: 600; }
@@ -109,7 +109,7 @@ dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   .activity-metrics strong { font-size: 23px; }
 }
 @media (max-width: 650px) {
-  main { padding: 24px 16px 40px; }
+  main { padding: calc(24px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
   .brand > span { display: none; }
   .refresh-controls { gap: 10px; }
   .refresh-controls p { font-size: 11px; }

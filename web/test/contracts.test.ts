@@ -1,9 +1,48 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 import type { Redemption } from '../src/api.ts'
 import { creditUsable, RedemptionClient, redemptionLabel } from '../src/redemptions.ts'
+
+test('home-screen launches fall back offline while API reads and commands bypass the service worker', async () => {
+  type FetchEvent = { request: { url: string; method: string; mode: string }; respondWith: (response: Promise<Response>) => void }
+  let handleFetch: (event: FetchEvent) => void = () => assert.fail('Missing fetch handler')
+  let reachable = true
+  let status = 200
+  runInNewContext(readFileSync(new URL('../../assets/web/sw.js', import.meta.url), 'utf8'), {
+    URL, AbortSignal, Response,
+    self: {
+      location: { origin: 'https://tally.example' },
+      addEventListener: (name: string, handler: typeof handleFetch) => { if (name === 'fetch') handleFetch = handler },
+    },
+    caches: { match: async () => new Response('Connection screen') },
+    fetch: async () => { if (!reachable) throw new Error('Offline'); return new Response('Current app', { status }) },
+  })
+  async function launch() {
+    let result: Promise<Response> | undefined
+    handleFetch({ request: { url: 'https://tally.example/', method: 'GET', mode: 'navigate' }, respondWith: response => { result = response } })
+    assert.ok(result)
+    return (await result).text()
+  }
+  assert.equal(await launch(), 'Current app')
+  reachable = false
+  assert.equal(await launch(), 'Connection screen')
+  reachable = true
+  status = 502
+  assert.equal(await launch(), 'Connection screen')
+  status = 200
+  assert.equal(await launch(), 'Current app')
+  for (const [path, method, mode] of [
+    ['/api/v1/accounts', 'GET', 'cors'],
+    ['/api/v1/accounts', 'GET', 'navigate'],
+    ['/api/v1/accounts/account/redemptions', 'POST', 'cors'],
+    ['/assets/app.js', 'GET', 'cors'],
+  ]) {
+    handleFetch({ request: { url: `https://tally.example${path}`, method, mode }, respondWith: () => assert.fail(`${path} must bypass the worker`) })
+  }
+})
 
 test('reset response loss and reload recover the same UUID with reads only', async () => {
   const stored = new Map<string, string>()
