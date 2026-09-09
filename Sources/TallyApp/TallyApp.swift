@@ -216,6 +216,8 @@ struct Dashboard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
+                    Image(nsImage: NSApplication.shared.applicationIconImage).resizable()
+                        .frame(width: 24, height: 24).accessibilityHidden(true)
                     Text("Tally").font(.title2.bold())
                     Spacer()
                     if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {

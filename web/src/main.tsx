@@ -7,6 +7,7 @@ import { RecordedActivity } from './RecordedActivity'
 import { useResetControls } from './ResetControls'
 import { QuotaRow } from './QuotaRow'
 import { AccountPreferences, ColorPicker, type PreferenceChange } from './AccountPreferences'
+import { PullToReload } from './PullToReload'
 
 function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean }) {
   const quota = account.groups.quotas
@@ -168,7 +169,8 @@ function App() {
   }
   const latest = [...data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)) ?? [], activityObserved].filter(date => date !== null).sort().at(-1)
   return <main>
-    <header className="page-heading"><div className="brand"><h1>Tally</h1><span>Subscription usage</span></div><div className="refresh-controls"><p>{latest ? now - Date.parse(latest) < 60_000 ? 'Updated just now' : `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p><button disabled={refreshing} onClick={() => refreshDialog.current?.showModal()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
+    <PullToReload loading={!data && !error} />
+    <header className="page-heading"><div className="brand"><h1><img src="/favicon.svg" alt="" width="30" height="30" />Tally</h1><span>Subscription usage</span></div><div className="refresh-controls"><p>{latest ? now - Date.parse(latest) < 60_000 ? 'Updated just now' : `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p><button disabled={refreshing} onClick={() => refreshDialog.current?.showModal()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
     <nav className="view-switcher" aria-label="Dashboard view"><button aria-pressed={view === 'accounts'} onClick={() => setView('accounts')}>Accounts{data && <span>{data.accounts.length}</span>}</button><button aria-pressed={view === 'activity'} onClick={() => setView('activity')}>Activity</button><button className="settings-button" disabled={!data} onClick={() => setSettingsOpen(true)}>Settings</button></nav>
     {preferenceError && <p className="notice" role="alert">{preferenceError}</p>}
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
