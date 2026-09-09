@@ -5,9 +5,13 @@ import TallyCore
 enum ProviderArtwork {
     struct Logo: Decodable { let name: String; let svg: String }
     // Native and web use the same release-bundled artwork from the accepted prototype.
-    static let logos = try! JSONDecoder().decode([String: Logo].self, from: Data(contentsOf:
-        Bundle.main.url(forResource: "logos", withExtension: "json", subdirectory: "Tally_TallyApp.bundle")
-        ?? Bundle.module.url(forResource: "logos", withExtension: "json")!))
+    static let logos = try! JSONDecoder().decode([String: Logo].self, from: Data(contentsOf: resource("logos", "json")))
+    // Tally's own tally-mark glyph, shown in the menu bar when no Account is pinned. Source: assets/tally-glyph.svg.
+    static let appGlyph = NSImage(data: try! Data(contentsOf: resource("tally-glyph", "svg")))!
+    private static func resource(_ name: String, _ ext: String) -> URL {
+        Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Tally_TallyApp.bundle")
+            ?? Bundle.module.url(forResource: name, withExtension: ext)!
+    }
     static let light = [0x1d1d1f, 0x2456e6, 0xd96d0b, 0x1e8a4c, 0x8b3fc9, 0xcf2f5a]
     static let dark = [0xf5f5f7, 0x7d9bff, 0xffa24a, 0x4fd08a, 0xc58bf2, 0xff7e9e]
     static func color(_ index: Int, dark: Bool) -> Color {
@@ -35,7 +39,10 @@ struct MenuPins: View {
     var body: some View {
         let pins = runtime.snapshot?.accounts.filter(\.pinned) ?? []
         HStack(spacing: 2) {
-            if pins.isEmpty { Image(systemName: "chart.bar").padding(.horizontal, 4).accessibilityLabel("Tally") }
+            if pins.isEmpty {
+                Image(nsImage: ProviderArtwork.appGlyph).resizable().renderingMode(.template)
+                    .frame(width: 18, height: 18).padding(.horizontal, 4).accessibilityLabel("Tally")
+            }
             ForEach(pins) { account in
                 HStack(spacing: 3) {
                     ProviderLogo(provider: account.provider, color: account.identityColorIndex, size: 18)

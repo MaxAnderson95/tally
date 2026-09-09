@@ -62,6 +62,9 @@ public struct TallyResponder: HTTPResponder {
             case "js": type = "text/javascript; charset=utf-8"
             case "css": type = "text/css; charset=utf-8"
             case "svg": type = "image/svg+xml"
+            case "png": type = "image/png"
+            case "ico": type = "image/x-icon"
+            case "webmanifest": type = "application/manifest+json"
             default: type = "text/html; charset=utf-8"
             }
             return Response(status: .ok, headers: [.contentType: type, .cacheControl: "no-store"], body: request.method == .head ? .init() : .init(byteBuffer: .init(bytes: data)))

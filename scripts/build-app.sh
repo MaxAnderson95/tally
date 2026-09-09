@@ -11,6 +11,7 @@ cp -R .build/arm64-apple-macosx/release/Tally_TallyApp.bundle "$app/Contents/Res
 cp -R .build/arm64-apple-macosx/release/Tally_TallyCore.bundle "$app/Contents/Resources/"
 rm -rf "$app/Contents/Resources/Web"
 cp -R web/dist "$app/Contents/Resources/Web"
+cp assets/Tally.icns "$app/Contents/Resources/Tally.icns"
 revision="$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,6 +20,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 <key>CFBundleIdentifier</key><string>net.maxanderson.tally</string>
 <key>CFBundleName</key><string>Tally</string>
 <key>CFBundleExecutable</key><string>Tally</string>
+<key>CFBundleIconFile</key><string>Tally</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>$revision</string>

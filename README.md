@@ -22,6 +22,8 @@ ditto build/Tally.app "$HOME/Applications/Tally.app"
 open "$HOME/Applications/Tally.app"
 ```
 
+Icon sources are the SVGs in `assets/`; `bash scripts/make-icons.sh` regenerates `assets/Tally.icns`, the PNG sizes, the web favicon and PWA icons, and the menu bar glyph resource (needs `librsvg` and `imagemagick` from Homebrew).
+
 Copy the complete app to `~/Applications/Tally.app` before first setup. First launch registers that main app for launch at login; Settings can disable it or open macOS Login Items when approval is required. No helper is installed. See [installation and update instructions](docs/INSTALLATION.md) and [assembled verification](docs/verification/installation.md) for tested behavior and remaining physical/tailnet checks.
 
 Click Tally's menu bar glyph to open the 360px native popover. Closing it leaves collection and HTTP running. Quit Tally stops both. The app collects on launch, wake, and every two minutes. Refresh schedules collection with in-flight joining and a 15-second minimum between attempts. GET requests read the owner's cache only. Failed collection keeps last-good readings stale; recognized Accounts restore cached readings as stale after restart.
@@ -47,6 +49,12 @@ Database discovery follows OpenCode V2: `OPENCODE_DB` if absolute, otherwise `<X
 Account IDs, per-database preferences, provider-local color sequences, and last-good readings live in `~/Library/Application Support/Tally/accounts.json`. This file contains token/workspace fingerprints, never raw credentials or workspace IDs. Database identity uses filesystem volume/device, file number, and creation time, so symlink aliases and renames preserve the namespace while a replaced file starts a new namespace. Returning to a recognized database restores its preferences. Successful Account removal clears its pins and readings, retaining its identity color for a recognized return. First nonempty discovery pins the batch; later discoveries start unpinned. Failed or empty discovery does not finish initial setup.
 
 Anthropic and xAI Accounts lose their ID, pins, and cached readings when OpenCode refresh rotates both the access and refresh tokens. An unchanged token proves continuity; the same credential row alone does not. OpenAI Accounts with a known workspace selector preserve identity through token rotation. See [Account identity rules](implementation/ACCOUNT-IDENTITY.md).
+
+## iPhone home screen
+
+Open Tally's configured HTTPS address in Safari while connected to Tailscale. Choose Share → Add to Home Screen, keep Open as Web App enabled if shown, and tap Add. Launch the Tally icon to use its standalone window. If an older shortcut still opens a Safari tab, remove that shortcut and add it again after loading the updated site.
+
+The installed web app respects the iPhone's safe areas and system appearance. After its first successful online load installs the service worker, it can launch a connection screen when the Mac is unreachable. Try again after reconnecting; a browser online event also retries automatically. Usage and reset commands require the running Mac app. The service worker caches only the connection screen, so an online launch always loads the current app and never substitutes cached API responses.
 
 ## Checks
 

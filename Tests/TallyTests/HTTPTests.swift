@@ -35,8 +35,16 @@ private struct AuthorityResponder: HTTPResponder {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     try Data("<html>Tally fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let iconTypes = ["manifest.webmanifest": "application/manifest+json", "icon-192.png": "image/png", "favicon.ico": "image/x-icon", "favicon.svg": "image/svg+xml"]
+    for name in iconTypes.keys { try Data(name.utf8).write(to: directory.appendingPathComponent(name)) }
     let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, webOrigin: "https://Tally.Tail1234.ts.net"), assetDirectory: directory)))
     try await app.test(.router) { client in
+        for (name, type) in iconTypes {
+            try await client.execute(uri: "/\(name)", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == type)
+            }
+        }
         try await client.execute(uri: "/api/v1/refresh", method: .post, headers: [testAuthority: "tally.tail1234.ts.net", .contentType: "application/json", .origin: "https://tally.tail1234.ts.net"], body: .init(string: "{}")) { response in
             #expect(response.status == .ok)
         }
