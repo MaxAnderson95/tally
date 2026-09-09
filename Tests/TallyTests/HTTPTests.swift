@@ -105,6 +105,49 @@ private struct AuthorityResponder: HTTPResponder {
         try await client.execute(uri: "/api/v1/refresh", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
             #expect(response.status == .methodNotAllowed)
         }
+        let colorPath = "/api/v1/accounts/\(initial.accounts[0].id)/color"
+        for path in [colorPath, "/api/v1/pins"] {
+            try await client.execute(uri: path, method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json", .origin: "https://evil.example"], body: .init(string: "{}")) { response in
+                #expect(response.status == .forbidden)
+            }
+            try await client.execute(uri: path, method: .put, headers: [testAuthority: "127.0.0.1:7483"], body: .init(string: "{}")) { response in
+                #expect(response.status == .unsupportedMediaType)
+            }
+            try await client.execute(uri: path, method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
+                #expect(response.status == .methodNotAllowed)
+            }
+            for body in ["{}", "null", "[]"] {
+                try await client.execute(uri: path, method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"], body: .init(string: body)) { response in
+                    #expect(response.status == .badRequest)
+                }
+            }
+        }
+        for body in ["{\"index\":6}", "{\"index\":-1}", "{\"index\":1.5}"] {
+            try await client.execute(uri: colorPath, method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"], body: .init(string: body)) { response in
+                #expect(response.status == .badRequest)
+            }
+        }
+        try await client.execute(uri: colorPath, method: .put, headers: [testAuthority: "tally.tail1234.ts.net", .contentType: "application/json", .origin: "https://tally.tail1234.ts.net"], body: .init(string: "{\"index\":4}")) { response in
+            #expect(response.status == .ok)
+            let decoded = try Wire.decoder().decode(AccountsResponse.self, from: Data(response.body.readableBytesView))
+            #expect(decoded.accounts.first { $0.id == initial.accounts[0].id }?.identityColorIndex == 4)
+            #expect(try await owner.account(id: initial.accounts[0].id).account.identityColorIndex == 4)
+        }
+        let reordered = Array(pins.reversed())
+        let pinBody = String(decoding: try JSONEncoder().encode(["accountIds": reordered]), as: UTF8.self)
+        try await client.execute(uri: "/api/v1/pins", method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"], body: .init(string: pinBody)) { response in
+            #expect(response.status == .ok)
+            let decoded = try Wire.decoder().decode(AccountsResponse.self, from: Data(response.body.readableBytesView))
+            #expect(decoded.accounts.filter(\.pinned).map(\.id) == reordered)
+            #expect(await owner.snapshot().accounts.filter(\.pinned).map(\.id) == reordered)
+        }
+        for ids in [["missing"], [pins[0], pins[0]]] {
+            let body = String(decoding: try JSONEncoder().encode(["accountIds": ids]), as: UTF8.self)
+            try await client.execute(uri: "/api/v1/pins", method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json"], body: .init(string: body)) { response in
+                #expect(response.status == .badRequest)
+                #expect(await owner.snapshot().accounts.filter(\.pinned).map(\.id) == reordered)
+            }
+        }
     }
 }
 

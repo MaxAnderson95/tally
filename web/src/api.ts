@@ -78,10 +78,31 @@ export function decodeAccounts(text: string): AccountsResponse {
 export const percentage = (value: number | null) => value === null ? '?' : `${Math.round(value)}%`
 
 export function resetLabel(window: QuotaWindow, now = Date.now()): string {
+  if (!window.resetAt) return ''
   if (window.resetAt && Date.parse(window.resetAt) <= now) return 'Reset time passed; awaiting update'
-  if (!window.resetAt) return window.resetState === 'not_started' ? 'Not started' : 'Reset time unavailable'
-  const minutes = Math.max(1, Math.ceil((Date.parse(window.resetAt) - now) / 60_000))
-  if (minutes < 60) return `Resets in ${minutes}m`
-  if (minutes < 1440) return `Resets in ${Math.floor(minutes / 60)}h ${minutes % 60}m`
-  return `Resets in ${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`
+  return `Resets in ${countdown(Date.parse(window.resetAt), now)}`
+}
+
+export function countdown(deadline: number, now = Date.now()): string {
+  const minutes = Math.max(0, Math.ceil((deadline - now) / 60_000))
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+export function earlyLimitDate(window: QuotaWindow, stale: boolean, now = Date.now()): number | null {
+  if (stale || window.stale || window.usedPercent === null || window.usedPercent < 5 || !window.resetAt || Date.parse(window.resetAt) <= now) return null
+  return window.pacing?.runOutAt ? Date.parse(window.pacing.runOutAt) : null
+}
+
+export function quotaWarning(account: Account, disconnected: boolean, inventoryError: Fault | null, now = Date.now()): string {
+  const quota = account.groups.quotas
+  const reasons: string[] = []
+  if (disconnected) reasons.push('Cannot reach Tally. Displayed readings may be out of date.')
+  const error = quota.error ?? inventoryError
+  if (error) reasons.push(error.message)
+  if (groupIsStale(quota, now)) reasons.push(quota.observedAt ? `Showing an older reading from ${new Date(quota.observedAt).toLocaleString()}.` : 'No successful quota reading yet.')
+  for (const window of quota.data?.windows ?? []) {
+    if (window.resetAt && Date.parse(window.resetAt) <= now) reasons.push(`${window.label}: reset time passed; awaiting an updated reading.`)
+  }
+  return reasons.join('\n')
 }

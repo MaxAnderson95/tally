@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, type Account, type AccountsResponse, type RefreshResponse } from './api'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, quotaWarning, type Account, type AccountsResponse, type RefreshResponse, type Fault } from './api'
 import './style.css'
-import { ProviderLogo, providerName } from './ProviderLogo'
+import { providerName } from './ProviderLogo'
 import { RecordedActivity } from './RecordedActivity'
 import { useResetControls } from './ResetControls'
+import { QuotaRow } from './QuotaRow'
+import { AccountPreferences, ColorPicker, type PreferenceChange } from './AccountPreferences'
 
-function AccountCard({ account, timezone, disconnected }: { account: Account; timezone: string; disconnected: boolean }) {
+function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean }) {
   const quota = account.groups.quotas
   const windows = overviewWindows(account)
   const extra = account.groups.extraUsage
@@ -16,25 +18,20 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
   const stale = groupIsStale(quota) || disconnected || windows.some(window => window.stale || (window.resetAt !== null && Date.parse(window.resetAt) <= Date.now()))
   const exact = (date: string | null) => date ? new Date(date).toLocaleString(undefined, { timeZone: timezone }) : 'Unavailable'
   const observed = (date: string | null) => date ? `${exact(date)} (${Math.max(0, Math.floor((Date.now() - Date.parse(date)) / 60_000))}m ago)` : 'Never'
+  const shortDate = (date: string) => new Date(date).toLocaleString(undefined, { timeZone: timezone, dateStyle: 'medium', timeStyle: 'short' })
+  const warning = quotaWarning(account, disconnected, inventoryError, now)
+  const errors = [...new Set(Object.values(account.groups).flatMap(group => group.error ? [group.error.message] : []))]
   return <article className="account">
     <header className="account-heading">
-      <ProviderLogo provider={account.provider} color={account.identityColorIndex} />
+      <ColorPicker account={account} save={save} disabled={saving || disconnected} />
       <div><h2>{providerName(account.provider)}</h2><p><span className="account-alias">{account.name}</span><span>{account.groups.plan.data?.name ?? 'Plan unknown'}</span></p></div>
-      {stale && <svg width="16" height="16" viewBox="0 0 20 20" role="img" aria-label="Stale reading"><title>Last-good values may be out of date</title><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>}
+      {stale && <span className="quota-warning" tabIndex={0} aria-label={warning || 'Stale reading'} title={warning || 'Last-good values may be out of date'}><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg><span role="tooltip">{warning || 'Last-good values may be out of date'}</span></span>}
       {resets.warning}
       <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}>{details ? '⌃' : '⌄'}</button>
     </header>
     {resets.result}
     {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
-    {windows.map((window, index) => <section className="quota" key={window.id}>
-      <div className={index === 0 && window.durationSeconds !== null ? 'hero' : 'window-heading'}>
-        {index === 0 && window.durationSeconds !== null ? <><strong>{percentage(window.remainingPercent)}</strong><span>{window.label} remaining</span></> : <><span>{window.label}</span><strong>{percentage(window.remainingPercent)}</strong></>}
-      </div>
-      <div className={`bar ${window.durationSeconds === null || window.remainingPercent === null ? 'uncertain' : ''}`} aria-label={`${percentage(window.remainingPercent)} remaining`}>
-        {window.remainingPercent !== null && <div style={{ width: `${window.remainingPercent}%` }} />}
-      </div>
-      {window.resetAt && <p className="timing">{resetLabel(window)}{window.durationSeconds === null && ' · duration unknown'}</p>}
-    </section>)}
+    {windows.map(window => <QuotaRow key={window.id} window={window} stale={disconnected || groupIsStale(quota, now)} now={now} />)}
     {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={account.provider === 'xai' ? 'PAYG' : 'Extra usage'}>
       <div className="window-heading"><span>{account.provider === 'xai' ? 'PAYG' : 'Extra usage'}</span><strong>{extra.data?.presentation === 'off' ? 'Off' : extra.data?.presentation === 'bounded' ? `${moneyLabel(extra.data.remaining)} remaining` : extra.data?.presentation === 'used_only' ? `${moneyLabel(extra.data.used)} used` : 'Unavailable'}</strong></div>
       {extra.data?.presentation === 'bounded' && <>
@@ -50,7 +47,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
       </section>
       <details className="reset-credits"><summary>{resetCountLabel(account.groups.resetSummary.data)}{(disconnected || groupIsStale(account.groups.resetSummary)) && ' (stale)'}</summary>
         {account.groups.resetDetails.data === null ? <p>Credit list unavailable</p> : account.groups.resetDetails.data.credits.length === 0 ? <p>No reset credits reported</p> : account.groups.resetDetails.data.credits.map(credit => <section className="credit" key={credit.id}>
-          <div className="credit-heading"><h3>{credit.title ?? 'Reset credit'}</h3><p>{creditExpiryLabel(credit, timezone)}</p></div>
+          <div className="credit-heading"><h3>{credit.title ?? 'Reset credit'}</h3><p>{credit.expiry.kind === 'at' ? `Expires ${new Date(credit.expiry.at).toLocaleDateString(undefined, { timeZone: timezone, dateStyle: 'medium' })}` : creditExpiryLabel(credit, timezone)}</p></div>
           <div className="credit-action">{resets.action(credit)}</div>
           <details><summary>Details</summary><dl>
             <dt>Credit ID</dt><dd>{credit.id}</dd><dt>Type</dt><dd>{credit.type ?? 'Unknown'}</dd>
@@ -62,7 +59,14 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
         <p className="fine-print">Using a credit requires confirmation. OpenAI decides which windows reset.</p>
       </details>
     </>}
-    {details && <section className="details" aria-label={`Details for ${account.name}`}><dl>
+    {details && <section className="details" aria-label={`Details for ${account.name}`}>
+      {errors.map(error => <p className="account-error" role="alert" key={error}>{error}</p>)}
+      {windows.filter(window => window.resetAt || window.pacing).map(window => <section className="quota-detail" key={window.id}><h3>{window.label}</h3><dl>
+        {window.resetAt && <><dt>Resets</dt><dd>{shortDate(window.resetAt)}</dd></>}
+        {!disconnected && !groupIsStale(quota, now) && !window.stale && window.resetAt && Date.parse(window.resetAt) > now && window.pacing && <><dt>At current pace</dt><dd>{window.pacing.runOutAt ? `Runs out ${shortDate(window.pacing.runOutAt)}` : 'Lasts through reset'}</dd></>}
+      </dl></section>)}
+      {windows.some(window => window.pacing) && <p className="fine-print">Pacing estimates assume your average usage rate continues.</p>}
+      <details><summary>Technical details</summary><dl>
       {account.command.state && <><dt>Reset operation</dt><dd>{account.command.state === 'unknown' ? 'Outcome unknown; open the card-header warning to acknowledge.' : 'Redeeming…'} {account.command.blockingOperationId}</dd></>}
       <dt>Mac timezone</dt><dd>{timezone}</dd>
       {(['plan', 'quotas', 'extraUsage', 'balances', 'resetSummary', 'resetDetails'] as const).map(key => {
@@ -85,7 +89,7 @@ function AccountCard({ account, timezone, disconnected }: { account: Account; ti
         <dt>Pacing</dt><dd>{window.pacing ? `${Math.round(window.pacing.projectedUsedPercent)}% projected at reset` : window.pacingUnavailableReason}</dd>
         {window.pacing && <><dt>Spare allowance</dt><dd>{window.pacing.sparePercent.toFixed(1)}%</dd><dt>Average-rate run-out</dt><dd>{window.pacing.runOutAt ? exact(window.pacing.runOutAt) : window.pacing.runOutReason}</dd></>}
       </div>)}
-    </dl></section>}
+    </dl></details></section>}
   </article>
 }
 
@@ -94,6 +98,9 @@ function App() {
   const [error, setError] = useState<string>()
   const [refreshing, setRefreshing] = useState(false)
   const [view, setView] = useState<'accounts' | 'activity'>('accounts')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [preferenceError, setPreferenceError] = useState<string>()
   const [schedule, setSchedule] = useState<RefreshResponse>()
   const [activityObserved, setActivityObserved] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
@@ -140,20 +147,40 @@ function App() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
+  async function savePreference(change: PreferenceChange): Promise<boolean> {
+    setSaving(true)
+    setPreferenceError(undefined)
+    try {
+      const url = change.kind === 'color' ? `/api/v1/accounts/${encodeURIComponent(change.accountId)}/color` : '/api/v1/pins'
+      const body = change.kind === 'color' ? { index: change.index } : { accountIds: change.accountIds }
+      const response = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) { const result: { error: Fault } = await response.json(); throw new Error(result.error.message) }
+      const next = decodeAccounts(await response.text())
+      if (build.current && build.current !== next.status.appBuild) { location.reload(); return true }
+      setData(next)
+      window.dispatchEvent(new Event('tally:operation'))
+      return true
+    } catch (failure) {
+      setPreferenceError(failure instanceof Error ? failure.message : 'Preferences could not be saved.')
+      return false
+    } finally { setSaving(false) }
+  }
   const latest = [...data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)) ?? [], activityObserved].filter(date => date !== null).sort().at(-1)
   return <main>
     <header className="page-heading"><div className="brand"><h1>Tally</h1><span>Subscription usage</span></div><div className="refresh-controls"><p>{latest ? now - Date.parse(latest) < 60_000 ? 'Updated just now' : `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
-    <nav className="view-switcher" aria-label="Dashboard view"><button aria-pressed={view === 'accounts'} onClick={() => setView('accounts')}>Accounts{data && <span>{data.accounts.length}</span>}</button><button aria-pressed={view === 'activity'} onClick={() => setView('activity')}>Activity</button></nav>
+    <nav className="view-switcher" aria-label="Dashboard view"><button aria-pressed={view === 'accounts'} onClick={() => setView('accounts')}>Accounts{data && <span>{data.accounts.length}</span>}</button><button aria-pressed={view === 'activity'} onClick={() => setView('activity')}>Activity</button><button className="settings-button" disabled={!data} onClick={() => setSettingsOpen(true)}>Settings</button></nav>
+    {preferenceError && <p className="notice" role="alert">{preferenceError}</p>}
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
     {data?.status.inventory.error && <p className="notice" role="alert">{data.status.inventory.error.message}</p>}
     <div className="account-region" hidden={view !== 'accounts'}>
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
-      <div className="section-heading"><h2>{pinned ? 'Pinned' : 'Other accounts'}</h2><span>{data.accounts.filter(account => account.pinned === pinned).length} accounts</span></div>
-      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} />)}</div>
+      {pinned && <div className="section-heading"><h2>Pinned</h2><span>{data.accounts.filter(account => account.pinned).length} accounts</span></div>}
+      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} />)}</div>
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}
     </div><div hidden={view !== 'activity'}><RecordedActivity refresh={schedule} onObserved={setActivityObserved} /></div>
+    <AccountPreferences accounts={data?.accounts ?? []} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} />
   </main>
 }
 

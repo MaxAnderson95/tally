@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, earlyLimitDate, countdown, quotaWarning, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 import type { Redemption } from '../src/api.ts'
 import { creditUsable, RedemptionClient, redemptionLabel } from '../src/redemptions.ts'
 
@@ -251,7 +251,7 @@ test('Swift wire fixture retains unknown, measured zero, stale failure, and two 
   assert.notEqual(account.groups.extraUsage.observedAt, null)
   assert.equal(percentage(windows[1].remainingPercent), '?')
   assert.equal(percentage(windows[2].remainingPercent), '100%')
-  assert.equal(resetLabel(windows[1]), 'Reset time unavailable')
+  assert.equal(resetLabel(windows[1]), '')
   assert.equal(resetLabel(windows[0], Date.parse('2030-09-08T00:00:00Z')), 'Reset time passed; awaiting update')
 })
 
@@ -295,4 +295,32 @@ test('cached browser readings age without advancing their successful observation
   assert.equal(groupIsStale(quota, Date.parse(observed) + 299_999), false)
   assert.equal(groupIsStale(quota, Date.parse(observed) + 300_000), true)
   assert.equal(quota.observedAt, observed)
+})
+
+test('web pacing uses owner projections with native warning thresholds and countdowns', () => {
+  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  const now = Date.parse('2030-09-01T00:00:00Z')
+  const window: QuotaWindow = { ...overviewWindows(account)[0], stale: false, usedPercent: 20, resetAt: new Date(now + 5 * 86400_000).toISOString(), pacing: { projectedUsedPercent: 120, sparePercent: -20, runOutAt: new Date(now + 3 * 86400_000 + 2 * 3600_000).toISOString(), runOutReason: null } }
+  assert.equal(earlyLimitDate(window, false, now), Date.parse(window.pacing!.runOutAt!))
+  assert.equal(countdown(earlyLimitDate(window, false, now)!, now), '3d 2h')
+  assert.equal(earlyLimitDate({ ...window, usedPercent: 4 }, false, now), null)
+  assert.notEqual(earlyLimitDate({ ...window, usedPercent: 5 }, false, now), null)
+  assert.equal(earlyLimitDate(window, true, now), null)
+  assert.equal(earlyLimitDate({ ...window, stale: true }, false, now), null)
+  assert.equal(earlyLimitDate({ ...window, pacing: null }, false, now), null)
+  assert.equal(earlyLimitDate({ ...window, resetAt: new Date(now).toISOString() }, false, now), null)
+  assert.equal(earlyLimitDate({ ...window, pacing: { ...window.pacing!, runOutAt: null } }, false, now), null)
+  assert.equal(resetLabel({ ...window, resetAt: null }, now), '')
+  assert.equal(resetLabel({ ...window, resetAt: new Date(now + 20 * 60_000).toISOString() }, now), 'Resets in 0h 20m')
+})
+
+test('quota warnings explain collection failures, passed resets, and disconnection', () => {
+  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  const now = Date.parse('2030-09-08T00:00:00Z')
+  account.groups.quotas.error = { code: 'rate_limited', message: 'Provider rate limited the request.', retryAt: null, blockingOperationId: null }
+  const warning = quotaWarning(account, true, null, now)
+  assert.match(warning, /Cannot reach Tally/)
+  assert.match(warning, /Provider rate limited/)
+  assert.match(warning, /older reading/)
+  assert.match(warning, /reset time passed/)
 })
