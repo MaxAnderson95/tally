@@ -72,6 +72,10 @@ button:disabled { opacity: .5; cursor: default; }
 .view-switcher .settings-button { margin-left: auto; }
 .preferences-dialog { color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(600px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0; }
 .preferences-dialog::backdrop { background: #0006; }
+.refresh-dialog { color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(420px, calc(100% - 32px)); padding: 24px; }
+.refresh-dialog::backdrop { background: #0006; }
+.refresh-dialog p { margin-top: 12px; }
+.refresh-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
 .preferences-content { padding: 24px; }
 .preferences-content > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .preferences-content > p { color: var(--muted); font-size: 12px; }

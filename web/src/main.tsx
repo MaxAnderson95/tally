@@ -105,6 +105,7 @@ function App() {
   const [activityObserved, setActivityObserved] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const build = useRef<string>(undefined)
+  const refreshDialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     let stopped = false
     let inFlight = false
@@ -167,7 +168,7 @@ function App() {
   }
   const latest = [...data?.accounts.flatMap(account => Object.values(account.groups).map(group => group.observedAt)) ?? [], activityObserved].filter(date => date !== null).sort().at(-1)
   return <main>
-    <header className="page-heading"><div className="brand"><h1>Tally</h1><span>Subscription usage</span></div><div className="refresh-controls"><p>{latest ? now - Date.parse(latest) < 60_000 ? 'Updated just now' : `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p><button disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
+    <header className="page-heading"><div className="brand"><h1>Tally</h1><span>Subscription usage</span></div><div className="refresh-controls"><p>{latest ? now - Date.parse(latest) < 60_000 ? 'Updated just now' : `Updated ${Math.max(0, Math.floor((now - Date.parse(latest)) / 60_000))}m ago` : 'No successful reading yet'}</p><button disabled={refreshing} onClick={() => refreshDialog.current?.showModal()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
     <nav className="view-switcher" aria-label="Dashboard view"><button aria-pressed={view === 'accounts'} onClick={() => setView('accounts')}>Accounts{data && <span>{data.accounts.length}</span>}</button><button aria-pressed={view === 'activity'} onClick={() => setView('activity')}>Activity</button><button className="settings-button" disabled={!data} onClick={() => setSettingsOpen(true)}>Settings</button></nav>
     {preferenceError && <p className="notice" role="alert">{preferenceError}</p>}
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
@@ -181,6 +182,14 @@ function App() {
     {!data && !error && <p>Reading Tally…</p>}
     </div><div hidden={view !== 'activity'}><RecordedActivity refresh={schedule} onObserved={setActivityObserved} /></div>
     <AccountPreferences accounts={data?.accounts ?? []} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} />
+    <dialog ref={refreshDialog} className="refresh-dialog" aria-labelledby="refresh-title" onClick={event => { if (event.target === event.currentTarget) refreshDialog.current?.close() }}>
+      <form method="dialog" onSubmit={event => { event.preventDefault(); refreshDialog.current?.close(); void refresh() }}>
+        <h2 id="refresh-title">Refresh provider usage?</h2>
+        <p>This requests up-to-date usage from your providers before the next scheduled check. Provider cooldowns still apply.</p>
+        <p className="fine-print">Reloading the page or pulling down to refresh only reloads Tally's saved readings.</p>
+        <div><button type="button" autoFocus onClick={() => refreshDialog.current?.close()}>Cancel</button><button type="submit" disabled={refreshing}>Refresh providers</button></div>
+      </form>
+    </dialog>
   </main>
 }
 
