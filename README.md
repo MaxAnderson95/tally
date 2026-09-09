@@ -11,6 +11,16 @@ The independently installed [OpenCode companion](companion/README.md) registers 
 
 Provider viability findings are in [docs/RESEARCH.md](docs/RESEARCH.md).
 
+## Agent skill
+
+Install the [Tally skill](skills/tally/SKILL.md) for your AI agent with:
+
+```sh
+npx skills add MaxAnderson95/tally
+```
+
+The skill guides agents through installing and checking Tally, locating its data, and querying subscription usage, quotas, reset times, and recorded activity through the REST API. The command installs the skill; the macOS app is installed separately using the instructions below.
+
 ## Build and install
 
 Requires Apple Silicon macOS 26+, Swift 6.3, and Node 22.12+ on the build machine. The packaged app contains its executable and compiled React web assets; Node is not used at runtime.
