@@ -677,6 +677,9 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(returned.accounts.filter(\.pinned).map(\.id) == pins)
     #expect(returned.accounts[0].groups.quotas.data != nil)
     #expect(returned.accounts[0].groups.quotas.stale)
+    var legacy = AccountIdentityStore(url: storage)
+    for key in legacy.state.namespaces.keys { legacy.state.namespaces[key]?.pinnedOrder = nil }
+    try legacy.save()
     let restarted = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     try await restarted.refresh(accountIDs: [])
     #expect(await restarted.snapshot().accounts.map(\.id) == returned.accounts.map(\.id))
@@ -696,36 +699,51 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await restarted.snapshot().accounts.allSatisfy { !$0.pinned && $0.pinOrder == nil })
 }
 
-@Test(arguments: ["anthropic", "xai"]) func chosenColorSurvivesRestartWithRotatedCredentials(provider: String) async throws {
+@Test(arguments: ["anthropic", "xai"]) func chosenPreferencesSurviveRestartWithRotatedCredentials(provider: String) async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let storage = directory.appendingPathComponent("accounts.json")
     let scenario = InventoryScenario()
     var credential = StoredCredential(storedID: "stable-row", name: "Personal", key: "access", provider: provider, refresh: "refresh")
-    scenario.set([credential])
+    let companion = StoredCredential(storedID: "companion", name: "Work", key: "companion-access", provider: provider, refresh: "companion-refresh")
+    scenario.set([credential, companion])
     let owner = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     try await owner.refresh(accountIDs: [])
     let original = try #require(await owner.snapshot().accounts.first)
+    let companionID = try #require(await owner.snapshot().accounts.last?.id)
+    try await owner.setPins([companionID, original.id])
     try await owner.setIdentityColor(accountID: original.id, index: 4)
     await owner.shutdown()
     credential.key = "rotated-access"; credential.refresh = "rotated-refresh"
-    scenario.set([credential])
+    scenario.set([credential, companion])
     let restarted = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     try await restarted.refresh(accountIDs: [])
-    let restored = try #require(await restarted.snapshot().accounts.first)
+    let restored = try #require(await restarted.snapshot().accounts.first { $0.name == "Personal" })
     #expect(restored.id != original.id)
     #expect(restored.identityColorIndex == 4)
-    #expect(!restored.pinned)
-    var unrelated = credential
-    unrelated.storedID = "other-row"; unrelated.key = "other-access"; unrelated.refresh = "other-refresh"
-    scenario.set([credential, unrelated])
+    #expect(restored.pinned && restored.pinOrder == 1)
+    #expect(await restarted.snapshot().accounts.filter(\.pinned).map(\.id) == [companionID, restored.id])
+    credential.key = "live-access"; credential.refresh = "live-refresh"; credential.name = "Renamed"
+    scenario.set([credential, companion])
     try await restarted.refresh(accountIDs: [])
-    let other = try #require(await restarted.snapshot().accounts.first { $0.id != restored.id })
-    #expect(other.identityColorIndex != 4)
-    scenario.set([credential], database: "other-database")
-    try await restarted.refresh(accountIDs: [])
-    #expect(await restarted.snapshot().accounts.first?.identityColorIndex == 0)
+    let rotated = try #require(await restarted.snapshot().accounts.first { $0.name == "Renamed" })
+    #expect(rotated.id != restored.id)
+    #expect(rotated.pinned && rotated.pinOrder == 1)
+    try await restarted.setPins([companionID])
     await restarted.shutdown()
+    credential.key = "unpinned-access"; credential.refresh = "unpinned-refresh"
+    var unrelated = credential
+    unrelated.storedID = "other-row"; unrelated.key = "other-access"; unrelated.refresh = "other-refresh"; unrelated.name = "Unrelated"
+    scenario.set([credential, companion, unrelated])
+    let unpinnedRestart = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    try await unpinnedRestart.refresh(accountIDs: [])
+    let other = try #require(await unpinnedRestart.snapshot().accounts.first { $0.name == "Unrelated" })
+    #expect(!other.pinned && other.pinOrder == nil)
+    #expect(await unpinnedRestart.snapshot().accounts.filter(\.pinned).map(\.id) == [companionID])
+    scenario.set([credential], database: "other-database")
+    try await unpinnedRestart.refresh(accountIDs: [])
+    #expect(await unpinnedRestart.snapshot().accounts.first?.identityColorIndex == 0)
+    await unpinnedRestart.shutdown()
 }
 
 @Test func unpinnedOrderSurvivesRestartAndTokenRotation() async throws {
@@ -789,7 +807,7 @@ private final class InventoryScenario: @unchecked Sendable {
     await #expect(throws: Fault.self) { try await owner.refresh(accountIDs: [openaiID]) }
     let replacement = await owner.snapshot()
     #expect(Set(replacement.accounts.map(\.id)).isDisjoint(with: first.accounts.map(\.id)))
-    #expect(replacement.accounts.allSatisfy { !$0.pinned && $0.groups.quotas.data == nil })
+    #expect(replacement.accounts.allSatisfy { $0.pinned && $0.groups.quotas.data == nil })
     #expect(openai.evidence.relation(to: evidence) == .different)
     #expect(refreshed.evidence.relation(to: claude.evidence) == .uncertain)
     var unknownWorkspace = workspace; unknownWorkspace.workspace = nil

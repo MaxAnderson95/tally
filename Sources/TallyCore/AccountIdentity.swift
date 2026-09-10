@@ -33,6 +33,7 @@ struct InventoryNamespace: Codable {
     var observedAt: Date?
     var nextColors: [String: Int] = [:]
     var colorsByCredential: [String: Int]? = nil
+    var pinnedOrder: [String]? = nil
     var unpinnedOrder: [String]? = nil
     var records: [IdentityRecord] = []
     var activity: [String: Group<ActivityData>]? = nil
