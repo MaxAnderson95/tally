@@ -182,6 +182,10 @@ public actor TallyOwner {
     private func cacheAccounts() {
         guard let databaseIdentity, var namespace = store.state.namespaces[databaseIdentity] else { return }
         if namespace.colorsByCredential == nil { namespace.colorsByCredential = [:] }
+        // Cached Accounts have no row mapping until inventory is read after a restart.
+        if accounts.allSatisfy({ credentials[$0.id] != nil }) {
+            namespace.pinnedOrder = accounts.filter(\.pinned).sorted(by: accountOrder).compactMap { credentials[$0.id]?.preferenceKey }
+        }
         for account in accounts {
             if let credential = credentials[account.id] {
                 namespace.colorsByCredential?[credential.preferenceKey] = account.identityColorIndex
@@ -254,6 +258,10 @@ public actor TallyOwner {
             account.name = credential.name
             // Cosmetic preferences follow the OpenCode row, independently of credential identity.
             account.identityColorIndex = namespace.colorsByCredential?[credential.preferenceKey] ?? account.identityColorIndex
+            if let pinnedOrder = namespace.pinnedOrder, namespace.initialized {
+                account.pinOrder = pinnedOrder.firstIndex(of: credential.preferenceKey)
+                account.pinned = account.pinOrder != nil
+            }
             if let previous = credentials[account.id], previous.fingerprint != credential.fingerprint {
                 for key in tasks.keys where key.account == account.id { tasks[key]?.cancel(); tasks[key] = nil }
                 account.groups.plan.refreshing = false
