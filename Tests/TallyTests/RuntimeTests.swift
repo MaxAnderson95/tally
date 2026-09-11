@@ -11,6 +11,204 @@ func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!)
 }
 
+private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) -> TallyCore.Group<Quotas> {
+    var group = TallyCore.Group<Quotas>()
+    group.succeed(Quotas(windows: [QuotaWindow(id: "rolling", label: "5-hour", cadence: "rolling", durationSeconds: 18_000,
+                                           durationSource: "provider", usedPercent: used, resetAt: reset)]), at: now)
+    return group
+}
+
+@Test func warmupSchedulingJitterResetAndUserActivity() throws {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var value = WarmupStatus()
+    var ready = value.prepare(quotas: warmupQuotas(at: now), now: now, jitter: { 600 })
+    #expect(!ready)
+    #expect(value.nextAt == nil)
+    value.enabled = true
+    let reset = now.addingTimeInterval(100)
+    ready = value.prepare(quotas: warmupQuotas(at: now, used: 50, reset: reset), now: now, jitter: { 600 })
+    #expect(!ready)
+    #expect(value.nextAt == reset.addingTimeInterval(600))
+    var restored = try Wire.decoder().decode(WarmupStatus.self, from: Wire.encoder().encode(value))
+    ready = restored.prepare(quotas: warmupQuotas(at: now, used: 50, reset: reset), now: now, jitter: { 1200 })
+    #expect(!ready)
+    #expect(restored.nextAt == value.nextAt)
+    let due = reset.addingTimeInterval(600)
+    ready = restored.prepare(quotas: warmupQuotas(at: due.addingTimeInterval(-1), reset: reset), now: due, jitter: { 600 })
+    #expect(!ready)
+    ready = restored.prepare(quotas: warmupQuotas(at: due, reset: reset), now: due, jitter: { 600 })
+    #expect(ready)
+    let newReset = due.addingTimeInterval(18_000)
+    ready = restored.prepare(quotas: warmupQuotas(at: due, used: 1, reset: newReset), now: due, jitter: { 600 })
+    #expect(!ready)
+    #expect(restored.nextAt == newReset.addingTimeInterval(600))
+}
+
+@Test func warmupBlocksStaleExhaustedUnknownAndMissedWindows() {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var value = WarmupStatus(); value.enabled = true
+    value.nextAt = now
+    var stale = warmupQuotas(at: now); stale.stale = true
+    var ready = value.prepare(quotas: stale, now: now, jitter: { 600 })
+    #expect(!ready)
+    ready = value.prepare(quotas: warmupQuotas(at: now.addingTimeInterval(-301)), now: now, jitter: { 600 })
+    #expect(!ready)
+    ready = value.prepare(quotas: warmupQuotas(at: now, used: 100, reset: now.addingTimeInterval(-1)), now: now, jitter: { 600 })
+    #expect(!ready)
+    var weekly = warmupQuotas(at: now)
+    weekly.data?.windows.append(QuotaWindow(id: "weekly", label: "Weekly", cadence: "weekly", durationSeconds: 604_800, durationSource: "provider", usedPercent: 100, resetAt: now.addingTimeInterval(1000)))
+    ready = value.prepare(quotas: weekly, now: now, jitter: { 600 })
+    #expect(!ready)
+    ready = value.prepare(quotas: warmupQuotas(at: now, used: 5), now: now, jitter: { 600 })
+    #expect(!ready)
+    var grok = warmupQuotas(at: now)
+    grok.data?.windows[0].durationSeconds = 604_800
+    ready = value.prepare(quotas: grok, now: now, jitter: { 600 })
+    #expect(!ready)
+    value.nextAt = now.addingTimeInterval(-18_000)
+    ready = value.prepare(quotas: warmupQuotas(at: now), now: now, jitter: { 600 })
+    #expect(!ready)
+    #expect(value.nextAt == now.addingTimeInterval(600))
+}
+
+@Test func warmupClaimPersistsCrashPauseAndMinimumInterval() throws {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var value = WarmupStatus(); value.enabled = true; value.nextAt = now
+    let first = value.claim(at: now)
+    #expect(WarmupStatus.prompts.contains(first))
+    var restored = try Wire.decoder().decode(WarmupStatus.self, from: Wire.encoder().encode(value))
+    #expect(restored.suspended)
+    var ready = restored.prepare(quotas: warmupQuotas(at: now), now: now, jitter: { 600 })
+    #expect(!ready)
+    restored.suspended = false
+    ready = restored.prepare(quotas: warmupQuotas(at: now), now: now, jitter: { 600 })
+    #expect(!ready)
+    let later = now.addingTimeInterval(18_000)
+    restored.nextAt = later
+    ready = restored.prepare(quotas: warmupQuotas(at: later), now: later, jitter: { 600 })
+    #expect(ready)
+    let second = restored.claim(at: later)
+    #expect(second != first)
+}
+
+@Test func warmupModelPickerFiltersProviderDisabledAndRetiredModels() throws {
+    let data = Data(#"{"data":[{"id":"cheap","providerID":"openai","name":"Cheap","enabled":true,"status":"active"},{"id":"old","providerID":"openai","name":"Old","enabled":true,"status":"deprecated"},{"id":"disabled","providerID":"openai","name":"Disabled","enabled":false,"status":"active"},{"id":"other","providerID":"anthropic","name":"Other","enabled":true,"status":"active"}]}"#.utf8)
+    #expect(try OpenCodeWarmup.decodeModels(data, provider: "openai").map(\.id) == ["openai/cheap"])
+}
+
+private final class WarmupScenario: @unchecked Sendable {
+    private let lock = NSLock()
+    private var time = Date(timeIntervalSince1970: 1_900_000_000)
+    private var sent: [String] = []
+    func now() -> Date { lock.withLock { time } }
+    func advance() { lock.withLock { time += 120 } }
+    func sends() -> [String] { lock.withLock { sent } }
+    func send(_ request: WarmupRequest) throws {
+        lock.withLock { sent.append(request.credential.storedID) }
+        throw Fault("warmup_model_unavailable", "Choose another model")
+    }
+    func owner(storage: URL) -> TallyOwner {
+        TallyOwner(clock: { self.now() }, storageURL: storage, warmupSend: { try self.send($0) }, warmupJitter: { 1 }, inventory: {
+            InventoryRead(databaseIdentity: "db", credentials: [StoredCredential(storedID: "selected", name: "Selected", key: "synthetic"), StoredCredential(storedID: "other", name: "Other", key: "other")])
+        }, collect: { _ in GoObservation(windows: warmupQuotas(at: self.now()).data!.windows) })
+    }
+}
+
+@Test func warmupOwnerOptInFailurePauseAndRestart() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storage = root.appendingPathComponent("accounts.json")
+    let scenario = WarmupScenario()
+    let owner = scenario.owner(storage: storage)
+    await owner.tick(); await owner.waitForCollection(); await owner.tick()
+    #expect(scenario.sends().isEmpty)
+    let id = try #require(await owner.snapshot().accounts.first(where: { $0.name == "Selected" })?.id)
+    await #expect(throws: Fault.self) { try await owner.setWarmup(accountID: id, enabled: true, model: "openai/other") }
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap")
+    await owner.tick()
+    scenario.advance()
+    await owner.tick(); await owner.waitForCollection(); await owner.tick(); await owner.waitForWarmup()
+    #expect(scenario.sends() == ["selected"])
+    #expect(await owner.warmupStatuses()[id]?.message == "Choose another model")
+    #expect(await owner.warmupStatuses()[id]?.lastAttemptAt == nil)
+    await owner.shutdown()
+    let restarted = scenario.owner(storage: storage)
+    await restarted.tick(); await restarted.waitForCollection(); await restarted.tick()
+    #expect(await restarted.warmupStatuses()[id]?.suspended == true)
+    #expect(scenario.sends() == ["selected"])
+    await restarted.shutdown()
+}
+
+private func warmupDatabase(_ url: URL, sql: String) throws {
+    var db: OpaquePointer?
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    defer { sqlite3_close(db) }
+    #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+}
+
+@Test func warmupPrivateCredentialCopyDoesNotChangeSourceOrCopyOtherAccounts() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source.db")
+    let destination = root.appendingPathComponent("private.db")
+    let schema = "CREATE TABLE credential (id TEXT, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER, time_updated INTEGER);"
+    try warmupDatabase(source, sql: schema + "INSERT INTO credential VALUES ('selected', 'openai', 'Selected', '{\"type\":\"oauth\",\"methodID\":\"chatgpt-browser\",\"access\":\"synthetic\",\"refresh\":\"must-stay-in-source\",\"expires\":4102444800000}', 0, 1, 1); INSERT INTO credential VALUES ('other', 'opencode-go', 'Other', '{\"type\":\"key\",\"key\":\"other\"}', 1, 1, 1);")
+    try warmupDatabase(destination, sql: schema)
+    let original = try Data(contentsOf: source)
+    let selected = try #require(OpenCodeInventory(path: source.path).read().credentials.first(where: { $0.storedID == "selected" }))
+    try OpenCodeWarmup.copyCredential(WarmupRequest(databasePath: source.path, credential: selected, model: "openai/cheap", prompt: "test"), to: destination)
+    #expect(try Data(contentsOf: source) == original)
+    let copied = try OpenCodeInventory(path: destination.path).read().credentials
+    #expect(copied.count == 1 && copied[0].storedID == "selected")
+    #expect(copied[0].refresh == "")
+    var replaced = selected; replaced.key = "different"; replaced.refresh = "different"
+    #expect(throws: Fault.self) { try OpenCodeWarmup.copyCredential(WarmupRequest(databasePath: source.path, credential: replaced, model: "openai/cheap", prompt: "test"), to: destination) }
+}
+
+@Test func warmupEnvironmentExcludesHostCredentialsAndConfiguration() throws {
+    let root = URL(fileURLWithPath: "/synthetic/private")
+    let environment = try OpenCodeWarmup.environment(root: root)
+    #expect(environment["HOME"] == root.path)
+    #expect(environment["OPENCODE_DB"] == root.appendingPathComponent("opencode.db").path)
+    #expect(environment["OPENCODE_CONFIG_PROJECT_DISABLE"] == "1")
+    #expect(environment["OPENAI_API_KEY"] == nil && environment["OPENCODE_SERVER"] == nil)
+    #expect(environment["OPENCODE_CONFIG_CONTENT"]?.contains("providers") == false)
+}
+
+@Test func warmupInstalledOpenCodeDiscoveryAndMockedTurn() async throws {
+    guard let executable = ProcessInfo.processInfo.environment["TALLY_WARMUP_OPENCODE"] else { return }
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source.db")
+    try warmupDatabase(source, sql: "CREATE TABLE credential (id TEXT, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER); INSERT INTO credential VALUES ('synthetic', 'opencode-go', 'Synthetic', '{\"type\":\"key\",\"key\":\"tally-invalid-test-key\"}', 0, 1);")
+    let credential = try #require(OpenCodeInventory(path: source.path).read().credentials.first)
+    let original = try Data(contentsOf: source)
+    let runner = OpenCodeWarmup(executable: URL(fileURLWithPath: executable))
+    let models = try await runner.models(WarmupRequest(databasePath: source.path, credential: credential, model: "", prompt: ""))
+    #expect(!models.isEmpty)
+    #expect(models.allSatisfy { $0.id.hasPrefix("opencode-go/") })
+    #expect(try Data(contentsOf: source) == original)
+    let wrapper = root.appendingPathComponent("mock-turn")
+    try Data(executable.utf8).write(to: root.appendingPathComponent("target"))
+    let script = """
+    #!/bin/sh
+    if [ "$1" = run ]; then
+        [ "$2" = --server ] && [ "$4" = --model ] && [ "$6" = --agent ] && [ "$7" = tally-warmup ] || exit 7
+        printf '%s\\n' '{"type":"step_finish","part":{"reason":"stop"}}'
+        exit 0
+    fi
+    exec "$(cat "$(dirname "$0")/target")" "$@"
+    """
+    try Data(script.utf8).write(to: wrapper)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: wrapper.path)
+    let mocked = OpenCodeWarmup(executable: wrapper)
+    let model = try #require(models.first)
+    try await mocked.send(WarmupRequest(databasePath: source.path, credential: credential, model: model.id, prompt: "What is 9 times 7?"))
+    #expect(try Data(contentsOf: source) == original)
+}
+
 @Test @MainActor func loginApprovalStatusRefreshPreservesRegistrationErrors() {
     let runtime = Runtime(owner: ResetScenario().owner())
     runtime.readLoginStatus(.requiresApproval)
