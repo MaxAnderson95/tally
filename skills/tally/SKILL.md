@@ -101,7 +101,7 @@ curl --fail-with-body --silent --show-error --max-time 10 \
   "$tally_url/api/v1/refresh" | jq .
 ```
 
-`{}` targets all Accounts; `{"accountIds":["returned-account-id"]}` targets selected Accounts; `{"accountIds":[]}` requests activity only. Every valid explicit refresh also schedules activity. The response contains Account schedules and an activity schedule, not completed readings. Inspect their state/reason/`nextAttemptAt`, then re-read the relevant GET endpoint after collection. In-flight work joins and attempts have a 15-second minimum interval; honor cooldowns instead of repeatedly posting refreshes. Failures retain last-good readings marked stale.
+`{}` targets all Accounts; `{"accountIds":["returned-account-id"]}` targets selected Accounts; `{"accountIds":[]}` requests activity only. Every valid explicit refresh also schedules activity. The response contains Account schedules and an activity schedule, not completed readings. Inspect their state/reason/`nextAttemptAt`, then re-read the relevant GET endpoint after collection. In-flight work joins and attempts have a 60-second minimum interval; honor cooldowns instead of repeatedly posting refreshes. Failures retain last-good readings marked stale.
 
 ### Recorded tokens and costs
 

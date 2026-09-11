@@ -554,7 +554,7 @@ private final class Scenario: @unchecked Sendable {
     private var failed = false
     private var calls = 0
     func now() -> Date { lock.withLock { currentTime } }
-    func advanceAndFail() { lock.withLock { currentTime += 20; failed = true } }
+    func advanceAndFail() { lock.withLock { currentTime += 60; failed = true } }
     func fetch() throws -> GoObservation {
         let failed = lock.withLock { calls += 1; return self.failed }
         if failed { throw Fault("provider_unavailable", "Sanitized provider failure.") }
@@ -988,13 +988,13 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(try await owner.refresh(accountIDs: []).accounts.isEmpty)
     await owner.waitForCollection()
     #expect(scenario.count("activity") == scans + 1 && scenario.count("a") == 2)
-    scenario.advance(14)
+    scenario.advance(59)
     #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "deferred")
     await owner.waitForCollection()
     scenario.advance(1)
     #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "started")
     await owner.waitForCollection()
-    scenario.advance(15)
+    scenario.advance(60)
     await owner.wake(); await owner.waitForCollection()
     #expect(scenario.count("a") == 4 && scenario.count("b") == 3)
     #expect(await owner.snapshot().accounts[0].groups.quotas.observedAt == scenario.now())
@@ -1009,7 +1009,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     try await owner.refresh(); await owner.waitForCollection()
     let observed = scenario.now()
     scenario.fail("a", Fault("provider_unavailable", "Synthetic failure."))
-    scenario.advance(15)
+    scenario.advance(60)
     for delay: TimeInterval in [120, 240, 480, 900, 900] {
         let response = try await owner.refresh()
         #expect(response.accounts[0].schedule.state == "started")
@@ -1063,7 +1063,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     continuation.yield(GoObservation(windows: []))
     await owner.waitForCollection()
     let first = await owner.snapshot().accounts[0]
-    scenario.advance(15)
+    scenario.advance(60)
     try await owner.refresh()
     #expect(await owner.snapshot().accounts[0].groups.quotas.refreshing)
     credential.key = "rotated"
@@ -1093,7 +1093,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     let owner = scenario.owner(storage: directory.appendingPathComponent("state.json"))
     try await owner.refresh(); await owner.waitForCollection()
     let id = try #require(await owner.snapshot().accounts.first?.id)
-    scenario.advance(30)
+    scenario.advance(60)
     #expect(try await owner.refresh().accounts[0].schedule.state == "blocked")
     let restarted = scenario.owner(storage: directory.appendingPathComponent("state.json"))
     #expect(try await restarted.refresh().accounts[0].schedule.state == "blocked")
@@ -1135,7 +1135,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(groups.plan.lastAttemptAt == started)
     #expect(groups.plan.observedAt == scenario.now())
     #expect(groups.quotas.data?.windows.isEmpty == true)
-    scenario.advance(15)
+    scenario.advance(60)
     try await owner.refresh()
     continuation.yield([.plan(nil)])
     await owner.waitForCollection()
@@ -1143,12 +1143,12 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(groups.plan.data == nil && groups.plan.observedAt == scenario.now() && groups.plan.error == nil)
     let lastGood = groups.plan.observedAt
     continuation.finish()
-    scenario.advance(15)
+    scenario.advance(60)
     try await owner.refresh(); await owner.waitForCollection()
     groups = await owner.snapshot().accounts[0].groups
     #expect(groups.plan.stale && groups.plan.observedAt == lastGood)
     #expect(!groups.quotas.stale && groups.quotas.observedAt == scenario.now())
-    scenario.advance(15)
+    scenario.advance(60)
     #expect(try await owner.refresh().accounts[0].schedule.state == "started")
     await owner.waitForCollection()
     groups = await owner.snapshot().accounts[0].groups

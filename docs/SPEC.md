@@ -70,7 +70,7 @@ A group is stale after five minutes without success, immediately on failed refre
 
 - Poll every included Account every two minutes while awake. Refresh on launch/wake and explicit request. Read inventory on that cadence and before targeted commands so known replacement cannot retarget old data.
 - Retry collection failures after 2, 4, 8, then 15 minutes, capped at 15. Honor longer provider Retry-After. Healthy Accounts continue normally. Retain known cooldown deadlines across ordinary restart so relaunch does not bypass them.
-- Explicit refresh joins in-flight work, respects cooldowns, and has a 15-second minimum between attempts. Launch/wake does not bypass known cooldowns. Return scheduling state without waiting for all results.
+- Explicit refresh joins in-flight work, respects cooldowns, and has a 60-second minimum between attempts. Launch/wake does not bypass known cooldowns. Return scheduling state without waiting for all results.
 - Expired/rejected credentials block further attempts with that credential until OpenCode supplies changed usable credentials. Tally never refreshes tokens. Expiry alone is not proof the user must reauthenticate.
 - Activity scanning is independent: two-minute cadence, launch/wake, and every explicit refresh, even when targeted provider requests are deferred. Use the same five-minute freshness baseline, immediate staleness on failed scans, and a separate scheduling result.
 
@@ -526,7 +526,7 @@ Derived from all named decisions. These are required implementation checks, not 
 | Area | Acceptance cases |
 | --- | --- |
 | Inventory | Active/inactive inclusion; Zen exclusion; distinct Go keys and OpenAI workspaces; deterministic duplicate names; rename/refresh continuity; replacement/removal; schema failure versus empty; namespace switching; first nonempty batch and later unpinned Accounts; palette stability/repetition. |
-| Collection | Two-minute cadence; wake; 15-second explicit minimum; in-flight joining; 2/4/8/15 backoff and Retry-After; rejected-credential blocking; healthy Account independence; activity refresh during provider cooldown. |
+| Collection | Two-minute cadence; wake; 60-second explicit minimum; in-flight joining; 2/4/8/15 backoff and Retry-After; rejected-credential blocking; healthy Account independence; activity refresh during provider cooldown. |
 | Readings | Successful zero/absence versus unknown; optional-detail failure; last-good restart; cache corruption; five-minute and reset-boundary staleness; no invented resets; valid/invalid pacing including unknown Monthly duration. |
 | Presentation | 360px popover; 320/390px phones; 1000px breakpoint; 14-pin reference case; single/stacked/tied/unknown-duration pins; both exact palettes; full-width 4px bars; unknown/Off/used-only/bounded extra usage; Fable-only scoped rows; key/value details; system appearance; failed web polling. |
 | Activity | V2 once, known fork-copy exclusion and child requests; Zen exclusion; missing usage/empty scans; exact 30 calendar days and DST; timezone changes; mutable source totals; provider-only attribution; Today totals with 30-day context chart. |

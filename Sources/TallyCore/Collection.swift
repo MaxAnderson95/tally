@@ -68,8 +68,12 @@ struct AttemptPolicy: Codable, Sendable {
     var failures = 0
     var blockedCredential: String?
 
+    // Explicit refreshes (companion tool, wake, Refresh button) skip the 120-second cadence, so this
+    // floor is the only bound on how fast any caller can drive requests at a provider endpoint.
+    static let attemptFloor: TimeInterval = 60
+
     func decision(at now: Date, automatic: Bool) -> Schedule? {
-        let deadlines = [cooldownUntil, lastAttemptAt?.addingTimeInterval(15), automatic ? nextAttemptAt : nil].compactMap { $0 }
+        let deadlines = [cooldownUntil, lastAttemptAt?.addingTimeInterval(Self.attemptFloor), automatic ? nextAttemptAt : nil].compactMap { $0 }
         if let deadline = deadlines.max(), deadline > now {
             var fault = Fault(cooldownUntil.map { $0 > now } == true ? "provider_cooldown" : "refresh_deferred", "The next collection attempt is scheduled.")
             fault.retryAt = deadline
