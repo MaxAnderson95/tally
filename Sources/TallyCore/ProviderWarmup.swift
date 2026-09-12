@@ -4,7 +4,12 @@ struct ProviderWarmup: Sendable {
     var transport: @Sendable (URLRequest) async throws -> ResetHTTPResponse = { try await SingleSendHTTP.send($0) }
 
     func models(_ credential: StoredCredential) async throws -> [WarmupModel] {
-        let path = credential.provider == "openai" ? "models?client_version=0.0.0" : "models"
+        let path: String
+        switch credential.provider {
+        case "openai": path = "models?client_version=0.0.0"
+        case "xai": path = "language-models"
+        default: path = "models"
+        }
         var request = try request(credential, path: path)
         var result: [WarmupModel] = []
         while true {

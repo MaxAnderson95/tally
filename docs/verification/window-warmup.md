@@ -34,6 +34,7 @@ Max authorized message testing on precisely these accounts. The opt-in `warmupAu
 | Claude Personal | `claude-haiku-4-5-20251001` | HTTP 200; terminal message delta and message stop confirmed |
 | ChatGPT Work | `gpt-5.6-luna` | HTTP 200; completed Responses event confirmed |
 | OpenCode Go Extra | `gpt-5.6-luna` | HTTP 200; completed Responses event confirmed |
+| xAI | `grok-4.3` | HTTP 200; chat completion confirmed |
 
 Go Extra's initial DeepSeek V4 Flash request returned HTTP 403 `RegionError`, requiring China-hosting opt-in. Its initial Luna chat-completions request returned HTTP 500; the Responses request then returned HTTP 400 `MissingSessionID`. Adding the source-backed routing header produced the successful Luna result. No region setting was changed. Production warm-up does not switch models or automatically replay failed messages.
 
@@ -49,4 +50,9 @@ The Go-only follow-up added `TALLY_WARMUP_LIVE_PROVIDER=opencode-go` to that com
 
 `bash scripts/test-swift.sh --filter warmup` passed 14 tests after the request changes. The two opt-in live tests return without network traffic in that run. Synthetic tests cover request headers and bodies, terminal-event validation, regional errors without fallback, quota-window changes, and refresh success or suspension after one retry. The full suite passed 82 tests before this request-shape follow-up.
 
-Live model discovery separately returned 11 Anthropic models, 5 visible OpenAI models, 37 Go models, and 12 xAI models. xAI message sending and live OAuth refresh are not verified. Live message tests establish completed inference, not the start of an idle quota window; the accounts may already have active windows. No reset credits were used. Changes have not been installed or published.
+Max subsequently authorized xAI testing. `TALLY_WARMUP_LIVE_SEND="$HOME/.local/share/opencode/opencode.db" TALLY_WARMUP_LIVE_PROVIDER=xai bash scripts/test-swift.sh --filter warmupAuthorizedLiveMessages` sent a short prompt to the stored `xAI` account with `grok-4.3`. The production HTTP client returned HTTP 200 and confirmed completion. This did not send messages to the other three accounts.
+
+xAI's `/v1/models` includes image and video generation models. Its `/v1/language-models` endpoint returned HTTP 200 and seven text-capable models using the subscription token. Tally uses that endpoint for the warm-up picker, excluding those media-generation choices without a hardcoded model-name list. The endpoint and response shape were checked against the live API and its reference:
+https://docs.x.ai/developers/rest-api-reference/inference/models
+
+Live model discovery separately returned 11 Anthropic models, 5 visible OpenAI models, and 37 Go models. Live OAuth refresh remains unverified. Live message tests establish completed inference, not the start of an idle quota window; the accounts may already have active windows. No reset credits were used. Changes are published on PR #45 but have not been installed or released.

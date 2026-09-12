@@ -228,6 +228,10 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected")
             if provider == "openai" { #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "workspace") }
             if request.httpMethod != "POST" {
+                if provider == "xai" {
+                    #expect(request.url?.absoluteString == "https://api.x.ai/v1/language-models")
+                    return ResetHTTPResponse(status: 200, body: Data(#"{"models":[{"id":"cheap","input_modalities":["text"],"output_modalities":["text"]}]}"#.utf8))
+                }
                 return ResetHTTPResponse(status: 200, body: Data((provider == "openai" ? #"{"models":[{"slug":"cheap","visibility":"list"}]}"# : #"{"data":[{"id":"cheap"}]}"#).utf8))
             }
             let data = try #require(request.httpBody)
@@ -362,7 +366,7 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
 @Test func warmupAuthorizedLiveMessages() async throws {
     guard let path = ProcessInfo.processInfo.environment["TALLY_WARMUP_LIVE_SEND"] else { return }
     let inventory = try OpenCodeInventory(path: path).read()
-    let targets = [("anthropic", "Personal", "claude-haiku-4-5-20251001"), ("openai", "Work", "gpt-5.6-luna"), ("opencode-go", "Extra", "gpt-5.6-luna")]
+    let targets = [("anthropic", "Personal", "claude-haiku-4-5-20251001"), ("openai", "Work", "gpt-5.6-luna"), ("opencode-go", "Extra", "gpt-5.6-luna"), ("xai", "xAI", "grok-4.3")]
     for (provider, name, model) in targets {
         if let only = ProcessInfo.processInfo.environment["TALLY_WARMUP_LIVE_PROVIDER"], provider != only { continue }
         let matches = inventory.credentials.filter { $0.provider == provider && $0.name == name }
