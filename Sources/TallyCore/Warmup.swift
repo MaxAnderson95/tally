@@ -5,6 +5,18 @@ public struct WarmupModel: Sendable, Identifiable, Equatable {
     public var name: String
 }
 
+public enum WarmupAvailability: Sendable {
+    case available, unknown, unnecessary
+
+    public var reason: String? {
+        switch self {
+        case .available: nil
+        case .unknown: "Waiting for quota information"
+        case .unnecessary: "No applicable five-hour window"
+        }
+    }
+}
+
 public struct WarmupStatus: Codable, Sendable, Equatable {
     public var enabled = false
     public var model = ""
@@ -20,21 +32,32 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
 
     public var needsAttention: Bool { enabled && suspended }
 
+    public static func availability(quotas: Group<Quotas>, model: String, now: Date = Date()) -> WarmupAvailability {
+        guard !quotas.stale, quotas.error == nil, let observed = quotas.observedAt,
+              now.timeIntervalSince(observed) < 300, let windows = quotas.data?.windows else { return .unknown }
+        let modelID = model.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+        if windows.contains(where: { $0.durationSeconds == 18_000 && $0.cadence == "rolling" && ($0.scope == "account" || $0.scope == "model" && (model.isEmpty || $0.modelId == modelID)) }) {
+            return .available
+        }
+        let unknown = windows.contains { $0.durationSeconds == nil && $0.cadence != "monthly" || $0.scope == "other" && $0.durationSeconds == 18_000 }
+        return unknown ? .unknown : .unnecessary
+    }
+
     mutating func prepare(quotas: Group<Quotas>, now: Date, jitter: () -> TimeInterval) -> Bool {
         guard enabled, !suspended else { return false }
-        guard !quotas.stale, quotas.error == nil, let observed = quotas.observedAt,
-              now.timeIntervalSince(observed) < 300, let windows = quotas.data?.windows else {
-            nextAt = nil; resetAt = nil
-            message = "Waiting for quota information"
+        let availability = Self.availability(quotas: quotas, model: model, now: now)
+        guard case .available = availability else {
+            if availability == .unnecessary { nextAt = nil; resetAt = nil }
+            message = availability == .unnecessary ? "Not needed: no applicable five-hour window" : "Waiting for quota information"
             return false
         }
+        guard let observed = quotas.observedAt, let windows = quotas.data?.windows else { return false }
         let modelID = model.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
         let applicable = windows.filter { $0.scope == "account" || ($0.scope == "model" && $0.modelId == modelID) }
         let candidates = applicable.filter { $0.durationSeconds == 18_000 && $0.cadence == "rolling" }
         guard !candidates.isEmpty else {
             nextAt = nil; resetAt = nil
-            let unknown = windows.contains { $0.durationSeconds == nil && $0.cadence != "monthly" || $0.scope == "other" && $0.durationSeconds == 18_000 }
-            message = unknown ? "Waiting for quota information" : "Not needed: no applicable five-hour window"
+            message = "Choose a model with an applicable five-hour window"
             return false
         }
         // Every applicable short window must be idle before a message can start a new one.
@@ -42,7 +65,15 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
             message = "Waiting for known usage"
             return false
         }
-        if applicable.contains(where: { ($0.usedPercent ?? 100) >= 100 && ($0.resetAt == nil || $0.resetAt! > now) }) {
+        let blocked = applicable.filter { ($0.usedPercent ?? 100) >= 100 && ($0.resetAt == nil || $0.resetAt! > now) }
+        if !blocked.isEmpty {
+            if blocked.allSatisfy({ $0.resetAt != nil }),
+               let reset = (blocked + candidates.filter { ($0.usedPercent ?? 0) > 0 }).compactMap(\.resetAt).max() {
+                if resetAt != reset || nextAt == nil {
+                    resetAt = reset
+                    nextAt = reset.addingTimeInterval(jitter())
+                }
+            } else { nextAt = nil }
             message = "Waiting for available allowance"
             return false
         }
@@ -64,6 +95,8 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
             return false
         }
         if let lastAttemptAt, now < lastAttemptAt.addingTimeInterval(18_000) {
+            let earliest = lastAttemptAt.addingTimeInterval(18_000)
+            if nextAt == nil || nextAt! < earliest { nextAt = earliest.addingTimeInterval(jitter()) }
             message = "Waiting for the next five-hour window"
             return false
         }

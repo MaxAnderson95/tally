@@ -187,6 +187,10 @@ public actor TallyOwner {
         guard !enabled || (model.hasPrefix(credential.provider + "/") && model.count > credential.provider.count + 1 && !model.contains(where: { $0.isWhitespace })) else {
             throw Fault("warmup_model", "Choose a model belonging to this Account's provider.")
         }
+        if enabled, let account = accounts.first(where: { $0.id == accountID }),
+           case .unnecessary = WarmupStatus.availability(quotas: account.groups.quotas, model: model, now: clock()) {
+            throw Fault("warmup_unnecessary", "This account has no applicable five-hour window.")
+        }
         let previous = store.state.namespaces[namespace]?.warmups
         var value = previous?[accountID] ?? WarmupStatus()
         value.enabled = enabled; value.model = model

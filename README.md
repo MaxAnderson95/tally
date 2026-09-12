@@ -44,7 +44,7 @@ Anthropic extra usage, OpenAI purchased credits, and banked reset credits show o
 
 ## Auto warm-up
 
-Auto warm-up is off by default for every Account. In native Settings, load the Account's models, choose the model you want to use, then enable **Auto warm-up**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection can add a small delay.
+Auto warm-up is off by default for every Account. Open the **Warm-up** tab in native Settings, turn on an eligible Account, and choose a model. Models load automatically; warming starts once a model is selected. Accounts without an applicable five-hour window have a disabled checkbox and an explanation. Menu bar pinning and ordering are in the **Menu bar** tab; startup and connection settings are in **General**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection can add a small delay.
 
 Tally sends HTTP requests directly to the selected provider using the selected Account's credentials. It creates no OpenCode sessions or processes and requires no executable or auth-plugin path. The model picker reads the provider's current model list.
 

@@ -420,11 +420,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 680),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "Tally Settings"
             window.isReleasedWhenClosed = false
-            window.contentMinSize = NSSize(width: 420, height: 360)
+            window.contentMinSize = NSSize(width: 500, height: 420)
             window.contentViewController = NSHostingController(rootView: TallySettings(runtime: runtime))
             window.center()
             settingsWindow = window

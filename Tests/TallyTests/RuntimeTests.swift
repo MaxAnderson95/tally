@@ -59,6 +59,11 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     weekly.data?.windows.append(QuotaWindow(id: "weekly", label: "Weekly", cadence: "weekly", durationSeconds: 604_800, durationSource: "provider", usedPercent: 100, resetAt: now.addingTimeInterval(1000)))
     ready = value.prepare(quotas: weekly, now: now, jitter: { 600 })
     #expect(!ready)
+    #expect(value.nextAt == now.addingTimeInterval(1600))
+    var awaitingReading = weekly; awaitingReading.stale = true
+    ready = value.prepare(quotas: awaitingReading, now: now, jitter: { 600 })
+    #expect(!ready)
+    #expect(value.nextAt == now.addingTimeInterval(1600))
     ready = value.prepare(quotas: warmupQuotas(at: now, used: 5), now: now, jitter: { 600 })
     #expect(!ready)
     var grok = warmupQuotas(at: now)
@@ -83,6 +88,7 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     restored.suspended = false
     ready = restored.prepare(quotas: warmupQuotas(at: now), now: now, jitter: { 600 })
     #expect(!ready)
+    #expect(restored.nextAt == now.addingTimeInterval(18_600))
     let later = now.addingTimeInterval(18_000)
     restored.nextAt = later
     ready = restored.prepare(quotas: warmupQuotas(at: later), now: later, jitter: { 600 })
@@ -142,11 +148,26 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     #expect(value.message == "Waiting for available allowance")
     for cadence in ["weekly", "monthly"] {
         quotas.data?.windows = [QuotaWindow(id: cadence, label: cadence, cadence: cadence, durationSeconds: cadence == "weekly" ? 604_800 : nil, durationSource: "provider", usedPercent: 0)]
+        #expect(WarmupStatus.availability(quotas: quotas, model: value.model, now: now) == .unnecessary)
         ready = value.prepare(quotas: quotas, now: now, jitter: { 600 })
         #expect(!ready)
         #expect(value.message == "Not needed: no applicable five-hour window")
         #expect(value.nextAt == nil)
     }
+}
+
+@Test func warmupCannotBeEnabledWithoutApplicableWindow() async throws {
+    let now = Date()
+    let owner = TallyOwner(clock: { now }, inventory: {
+        InventoryRead(databaseIdentity: "test", credentials: [StoredCredential(storedID: "weekly", name: "Weekly only", key: "synthetic")])
+    }, collect: { _ in
+        GoObservation(windows: [QuotaWindow(id: "weekly", label: "Weekly", cadence: "weekly", durationSeconds: 604_800, durationSource: "provider", usedPercent: 0)])
+    })
+    await owner.tick(); await owner.waitForCollection()
+    let id = try #require(await owner.snapshot().accounts.first?.id)
+    await #expect(throws: Fault.self) { try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap") }
+    #expect(await owner.warmupStatuses()[id]?.enabled != true)
+    await owner.shutdown()
 }
 
 @Test func warmupModelPickerUsesProviderVisibility() throws {
