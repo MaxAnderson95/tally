@@ -32,7 +32,7 @@ Prefer to build it yourself? See [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 Click the menu bar glyph to open the popover. Tally refreshes on launch, on wake, and every two minutes. The **Refresh** button pulls on demand.
 
-**OpenCode owns your credentials.** Tally opens OpenCode's local database read-only and never creates, modifies, or refreshes anything in it. Usage collection works while OpenCode is stopped. Optional auto warm-up temporarily copies the selected Account's access credential into a private OpenCode database; refresh tokens stay in the original database. Sign in, rename accounts, and manage auth in OpenCode as usual.
+**Manage accounts in OpenCode.** Tally reads its local credential database for usage collection. Auto warm-up and its model picker can refresh near-expiry OAuth credentials and save the replacement tokens to the same Account. Account names, active-account selection, and other credential metadata stay intact. Usage collection works while OpenCode is stopped and stored tokens remain usable.
 
 **Quota bars turn red when you are burning too fast.** A blue bar means your current pace fits inside the window. Red means your average usage projects that you will hit the limit before the window resets, and Tally shows how long you have. The small tick mark is the even-pace marker: where you would be if you spread the window evenly.
 
@@ -44,13 +44,15 @@ Anthropic extra usage, OpenAI purchased credits, and banked reset credits show o
 
 ## Auto warm-up
 
-Auto warm-up is off by default for every Account. In native Settings, load the Account's models, choose the model you want to use, then enable **Auto warm-up**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection and OpenCode startup can add a small delay.
+Auto warm-up is off by default for every Account. In native Settings, load the Account's models, choose the model you want to use, then enable **Auto warm-up**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection can add a small delay.
 
-Tally starts and stops its own private OpenCode V2 server, so an existing server is not required. Configure the executable path in Settings. Claude also needs the directory of your already-installed OpenCode subscription auth plugin. Tally isolates global/project configuration and does not install an auth plugin for you.
+Tally sends HTTP requests directly to the selected provider using the selected Account's credentials. It creates no OpenCode sessions or processes and requires no executable or auth-plugin path. The model picker reads the provider's current model list.
 
-The selected model never falls back to another model. A missing model or failed turn pauses warm-up and displays the reason in Settings. Reload models and choose a replacement, or toggle off and on to resume after fixing the error. Near-expiry tokens wait for OpenCode to refresh them. Stale quota readings, exhausted allowance, and pending reset operations prevent sending. Grok currently has only a weekly reading in Tally, so its warm-up waits for a five-hour reading.
+The selected model never falls back to another model. A missing model or failed turn pauses warm-up and displays the reason in Settings. Reload models and choose a replacement, or toggle off and on to resume after fixing the error. Tally refreshes near-expiry tokens before collecting the quota needed for scheduling. A failed refresh rereads the stored credential and allows one retry.
 
-Warm-up runs only while Tally is running and the Mac is awake. Missed windows do not accumulate. Attempts are saved before sending; an interrupted attempt requires manual resumption. Tally does not retry failed turns, although OpenCode and the selected auth plugin may retry requests within a turn. Warm-up consumes subscription allowance and can be subject to provider restrictions; timing and prompt variation do not guarantee provider approval or prevent account suspension.
+Eligibility follows current quota readings, not plan names. Accounts with only weekly or monthly windows show "Not needed" and send nothing. The enabled preference remains stored so a five-hour window appearing later can resume scheduling. Missing or stale quota data shows "Waiting for quota information". Exhausted applicable allowance and pending reset operations prevent sending. Grok currently reports only a weekly window in Tally.
+
+Warm-up runs only while Tally is running and the Mac is awake. Missed windows do not accumulate. Attempts are saved before sending; an interrupted attempt requires manual resumption. Tally sends each message once and does not replay ambiguous failures. Warm-up consumes subscription allowance and can be subject to provider restrictions; timing and prompt variation do not guarantee provider approval or prevent account suspension.
 
 ## On your phone
 

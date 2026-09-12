@@ -39,9 +39,6 @@ struct TallySettings: View {
                         WarmupSettings(account: account, runtime: runtime)
                     }
                 }
-                TextField("OpenCode V2 executable", text: $runtime.warmupExecutable)
-                TextField("Installed Claude auth plugin directory", text: $runtime.warmupAuthPlugin)
-                Text("Warm-up uses a private OpenCode server. Claude requires your installed subscription auth plugin. Save execution settings before loading models.").font(.caption)
                 TextField("Loopback port", text: $runtime.port)
                 TextField("Allowed HTTPS web origin (optional)", text: $runtime.webOrigin)
                 Button("Save settings and restart listener") { Task { await runtime.saveSettings() } }
@@ -74,7 +71,7 @@ private struct WarmupSettings: View {
                             models = try await runtime.owner.warmupModels(accountID: account.id)
                             error = models.isEmpty ? "No models available for this Account." : nil
                         } catch let fault as Fault { error = fault.message }
-                        catch { self.error = "Could not load models from OpenCode." }
+                        catch { self.error = "Could not load models from the provider." }
                     }
                 }.disabled(loading)
             }

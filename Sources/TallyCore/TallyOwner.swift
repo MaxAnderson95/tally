@@ -27,7 +27,8 @@ public actor TallyOwner {
     private var redemptionTasks: [String: Task<Void, Never>] = [:]
     private let quitWait: Duration
     private var databasePath = ""
-    private var warmupRunner = OpenCodeWarmup(executable: URL(fileURLWithPath: OpenCodeWarmup.defaultExecutable()))
+    private let warmupRunner = ProviderWarmup()
+    private var warmupCredentials = WarmupCredentials()
     private var warmupTask: Task<Void, Never>?
     private var warmingAccount: String?
     var warmupSend: (@Sendable (WarmupRequest) async throws -> Void)?
@@ -66,7 +67,8 @@ public actor TallyOwner {
          redemptionStorage: RedemptionStorage = .unavailable,
          resetProvider: OpenAIRedemption = OpenAIRedemption(transport: { _ in throw Fault("unexpected", "No test reset transport configured.") }),
          warmupSend: @escaping @Sendable (WarmupRequest) async throws -> Void = { _ in throw Fault("unexpected", "No test warm-up transport configured.") },
-         warmupJitter: @escaping @Sendable () -> TimeInterval = { 600 },
+          warmupJitter: @escaping @Sendable () -> TimeInterval = { 600 },
+          warmupCredentials: WarmupCredentials = WarmupCredentials(),
          quitWait: Duration = .seconds(15),
          inventory: @escaping @Sendable () throws -> InventoryRead,
          collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
@@ -84,6 +86,7 @@ public actor TallyOwner {
         self.resetProvider = resetProvider
         self.warmupSend = warmupSend
         self.warmupJitter = warmupJitter
+        self.warmupCredentials = warmupCredentials
         self.quitWait = quitWait
     }
 
@@ -133,13 +136,6 @@ public actor TallyOwner {
 
     public func settingsError() -> Fault? { storageError }
 
-    public static var defaultWarmupExecutable: String { OpenCodeWarmup.defaultExecutable() }
-
-    public func setWarmupExecution(executable: String, anthropicPluginPath: String) {
-        warmupTask?.cancel()
-        warmupRunner = OpenCodeWarmup(executable: URL(fileURLWithPath: executable), anthropicPluginPath: anthropicPluginPath)
-    }
-
     public func warmupStatuses() -> [String: WarmupStatus] {
         guard let databaseIdentity else { return [:] }
         return store.state.namespaces[databaseIdentity]?.warmups ?? [:]
@@ -148,10 +144,40 @@ public actor TallyOwner {
     func waitForWarmup() async { await warmupTask?.value }
 
     public func warmupModels(accountID: String) async throws -> [WarmupModel] {
-        guard inventory.error == nil, let credential = credentials[accountID] else {
+        guard inventory.error == nil, credentials[accountID] != nil else {
             throw Fault("inventory_unavailable", "Refresh Account inventory before loading models.")
         }
-        return try await warmupRunner.models(WarmupRequest(databasePath: databasePath, credential: credential, model: "", prompt: ""))
+        return try await warmupRunner.models(usableWarmupCredential(accountID: accountID))
+    }
+
+    private func usableWarmupCredential(accountID: String) async throws -> StoredCredential {
+        guard let original = credentials[accountID], let namespace = databaseIdentity else { throw Fault("account_not_found", "Account disappeared.") }
+        if original.expiresAt.map({ $0.timeIntervalSince(clock()) > 600 }) ?? true { return original }
+        let source = OpenCodeInventory(path: databasePath)
+        for attempt in 0...1 {
+            do {
+                try Task.checkCancellation()
+                guard databaseIdentity == namespace, try source.databaseIdentity() == namespace,
+                      let current = try source.read().credentials.first(where: { $0.storedID == original.storedID && $0.provider == original.provider }),
+                      current.workspace == original.workspace else { throw Fault("warmup_credentials", "Account changed during token refresh.") }
+                var refreshed = current
+                if current.expiresAt.map({ $0.timeIntervalSince(clock()) <= 600 }) == true {
+                    refreshed = try await warmupCredentials.refresh(current, now: clock())
+                    try Task.checkCancellation()
+                    guard databaseIdentity == namespace, try source.databaseIdentity() == namespace else { throw Fault("warmup_credentials", "OpenCode database changed during refresh.") }
+                    try WarmupCredentials.persist(refreshed, replacing: current, path: databasePath)
+                }
+                // This refresh establishes continuity even when both OAuth tokens rotate.
+                if let index = store.state.namespaces[namespace]?.records.firstIndex(where: { $0.account.id == accountID }) {
+                    store.state.namespaces[namespace]?.records[index].evidence = refreshed.evidence
+                }
+                _ = try refresh(accountIDs: [accountID], automatic: false)
+                return refreshed
+            } catch {
+                if Task.isCancelled || attempt == 1 { throw error }
+            }
+        }
+        throw Fault("warmup_refresh", "Could not refresh this Account.")
     }
 
     public func setWarmup(accountID: String, enabled: Bool, model: String) throws {
@@ -166,7 +192,7 @@ public actor TallyOwner {
         value.enabled = enabled; value.model = model
         value.revision = UUID().uuidString
         value.nextAt = nil; value.resetAt = nil; value.suspended = false
-        value.message = enabled ? "Waiting for a fresh five-hour quota reading" : "Off"
+        value.message = enabled ? "Waiting for quota information" : "Off"
         if store.state.namespaces[namespace]?.warmups == nil { store.state.namespaces[namespace]?.warmups = [:] }
         store.state.namespaces[namespace]?.warmups?[accountID] = value
         do { try store.save(); storageError = nil }
@@ -185,7 +211,23 @@ public actor TallyOwner {
             var ready = false
             if value.suspended { continue }
             if credential.expiresAt.map({ $0.timeIntervalSince(clock()) <= 600 }) == true {
-                value.message = "Waiting for OpenCode to refresh this Account's token"
+                value.message = "Refreshing Account credentials"
+                store.state.namespaces[namespace]?.warmups?[account.id] = value
+                persist()
+                warmingAccount = account.id
+                let revision = value.revision
+                warmupTask = Task {
+                    var fault: Fault?
+                    do { _ = try await usableWarmupCredential(accountID: account.id) }
+                    catch { fault = error as? Fault ?? Fault("warmup_refresh", "Token refresh failed. Sign in again in OpenCode, then resume warm-up.") }
+                    warmupTask = nil; warmingAccount = nil
+                    guard var current = store.state.namespaces[namespace]?.warmups?[account.id], current.revision == revision else { return }
+                    current.suspended = fault != nil
+                    current.message = fault?.message ?? "Waiting for quota information"
+                    store.state.namespaces[namespace]?.warmups?[account.id] = current
+                    persist()
+                }
+                return
             } else if redemptions.block(accountID: account.id, target: credential.evidence) != nil {
                 value.message = "Waiting for the pending reset operation"
             } else {
@@ -197,7 +239,7 @@ public actor TallyOwner {
             do { try store.save(); storageError = nil }
             catch { store.state.namespaces[namespace]?.warmups?[account.id] = before; storageError = error as? Fault; return }
             guard ready else { continue }
-            let request = WarmupRequest(databasePath: databasePath, credential: credential, model: value.model, prompt: prompt)
+            let request = WarmupRequest(credential: credential, model: value.model, prompt: prompt)
             let runner = warmupRunner
             let send = warmupSend
             warmingAccount = account.id

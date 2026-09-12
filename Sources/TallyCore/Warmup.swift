@@ -23,20 +23,30 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
     mutating func prepare(quotas: Group<Quotas>, now: Date, jitter: () -> TimeInterval) -> Bool {
         guard enabled, !suspended else { return false }
         guard !quotas.stale, quotas.error == nil, let observed = quotas.observedAt,
-              now.timeIntervalSince(observed) < 300, let windows = quotas.data?.windows,
-              let window = windows.first(where: { $0.scope == "account" && $0.durationSeconds == 18_000 }) else {
-            message = "Waiting for a fresh five-hour quota reading"
+              now.timeIntervalSince(observed) < 300, let windows = quotas.data?.windows else {
+            nextAt = nil; resetAt = nil
+            message = "Waiting for quota information"
             return false
         }
-        guard let used = window.usedPercent else {
+        let modelID = model.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+        let applicable = windows.filter { $0.scope == "account" || ($0.scope == "model" && $0.modelId == modelID) }
+        let candidates = applicable.filter { $0.durationSeconds == 18_000 && $0.cadence == "rolling" }
+        guard !candidates.isEmpty else {
+            nextAt = nil; resetAt = nil
+            let unknown = windows.contains { $0.durationSeconds == nil && $0.cadence != "monthly" || $0.scope == "other" && $0.durationSeconds == 18_000 }
+            message = unknown ? "Waiting for quota information" : "Not needed: no applicable five-hour window"
+            return false
+        }
+        // Every applicable short window must be idle before a message can start a new one.
+        guard candidates.allSatisfy({ $0.usedPercent != nil }) else {
             message = "Waiting for known usage"
             return false
         }
-        if windows.contains(where: { $0.scope == "account" && ($0.usedPercent ?? 100) >= 100 && ($0.resetAt == nil || $0.resetAt! > now) }) {
+        if applicable.contains(where: { ($0.usedPercent ?? 100) >= 100 && ($0.resetAt == nil || $0.resetAt! > now) }) {
             message = "Waiting for available allowance"
             return false
         }
-        if let reset = window.resetAt, reset > now, used > 0 {
+        if let reset = candidates.filter({ ($0.usedPercent ?? 0) > 0 }).compactMap(\.resetAt).filter({ $0 > now }).max() {
             if resetAt != reset {
                 resetAt = reset
                 nextAt = reset.addingTimeInterval(jitter())
@@ -45,11 +55,11 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
             return false
         }
         // A passed timestamp alone does not prove the provider has restored allowance.
-        if used >= 100 || (window.resetAt.map { $0 <= now && observed < $0 } ?? false) {
+        if candidates.contains(where: { ($0.usedPercent ?? 0) >= 100 || ($0.resetAt.map { $0 <= now && observed < $0 } ?? false) }) {
             message = "Waiting for the provider to confirm reset"
             return false
         }
-        if used > 0 && window.resetAt == nil {
+        if candidates.contains(where: { ($0.usedPercent ?? 0) > 0 && $0.resetAt == nil }) {
             message = "Waiting for a reset time"
             return false
         }
@@ -74,7 +84,7 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
         promptIndex = choices.randomElement()!
         lastAttemptAt = now
         nextAt = nil
-        // Persist before invoking OpenCode. A crash or ambiguous result must never resend.
+        // Persist before sending. A crash or ambiguous result must never resend.
         suspended = true
         message = "Sending; if interrupted, toggle off and on to resume"
         return Self.prompts[promptIndex!]
@@ -95,7 +105,6 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
 }
 
 struct WarmupRequest: Sendable {
-    var databasePath: String
     var credential: StoredCredential
     var model: String
     var prompt: String

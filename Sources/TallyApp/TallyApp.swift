@@ -24,8 +24,6 @@ final class Runtime: ObservableObject {
     @Published var resetErrors: [String: String] = [:]
     @Published var resetBusy: Set<String> = []
     @Published var warmups: [String: WarmupStatus] = [:]
-    @Published var warmupExecutable: String
-    @Published var warmupAuthPlugin: String
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -42,8 +40,6 @@ final class Runtime: ObservableObject {
         databasePath = path
         port = String(settings.object(forKey: "port") as? Int ?? 7483)
         webOrigin = settings.string(forKey: "webOrigin") ?? ""
-        warmupExecutable = settings.string(forKey: "warmupExecutable") ?? TallyOwner.defaultWarmupExecutable
-        warmupAuthPlugin = settings.string(forKey: "warmupAuthPlugin") ?? ""
         self.owner = owner ?? TallyOwner(databasePath: path, appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development")
     }
 
@@ -54,7 +50,6 @@ final class Runtime: ObservableObject {
         readLoginStatus()
         startServer()
         pollingTask = Task {
-            await owner.setWarmupExecution(executable: warmupExecutable, anthropicPluginPath: warmupAuthPlugin)
             await owner.wake()
             while !Task.isCancelled {
                 await owner.tick()
@@ -168,9 +163,6 @@ final class Runtime: ObservableObject {
         settings.set(databasePath, forKey: "databasePath")
         settings.set(number, forKey: "port")
         settings.set(webOrigin, forKey: "webOrigin")
-        settings.set(warmupExecutable, forKey: "warmupExecutable")
-        settings.set(warmupAuthPlugin, forKey: "warmupAuthPlugin")
-        await owner.setWarmupExecution(executable: warmupExecutable, anthropicPluginPath: warmupAuthPlugin)
         do { try await owner.setDatabasePath(databasePath); settingsError = nil }
         catch let fault as Fault { settingsError = fault.message }
         catch { settingsError = "Cannot read the selected database." }
