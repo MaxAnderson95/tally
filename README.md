@@ -32,7 +32,7 @@ Prefer to build it yourself? See [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 Click the menu bar glyph to open the popover. Tally refreshes on launch, on wake, and every two minutes. The **Refresh** button pulls on demand.
 
-**Your credentials stay in OpenCode.** Tally opens OpenCode's local database read-only and never creates, modifies, or refreshes anything in it. It stores no credentials of its own, and OpenCode does not need to be running. Sign in, rename accounts, and manage auth in OpenCode as usual.
+**Manage accounts in OpenCode.** Tally reads its local credential database for usage collection. Auto warm-up and its model picker can refresh near-expiry OAuth credentials and save the replacement tokens to the same Account. Account names, active-account selection, and other credential metadata stay intact. Usage collection works while OpenCode is stopped and stored tokens remain usable.
 
 **Quota bars turn red when you are burning too fast.** A blue bar means your current pace fits inside the window. Red means your average usage projects that you will hit the limit before the window resets, and Tally shows how long you have. The small tick mark is the even-pace marker: where you would be if you spread the window evenly.
 
@@ -41,6 +41,18 @@ Click the menu bar glyph to open the popover. Tally refreshes on launch, on wake
 **The Activity tab counts what you actually spent.** Today, yesterday, or the last 30 days of recorded OpenCode tokens and cost, broken down by provider and model, with a 30-day trend. Tally also estimates what the same activity would have cost at API rates, which is separate from what your subscription charged you.
 
 Anthropic extra usage, OpenAI purchased credits, and banked reset credits show on the account cards. Redeeming a reset always needs an explicit confirmation from you.
+
+## Auto warm-up
+
+Auto warm-up is off by default for every Account. Open the **Warm-up** tab in native Settings, turn on an eligible Account, and choose a model. Models load automatically; warming starts once a model is selected. Accounts without an applicable five-hour window have a disabled checkbox and an explanation. Menu bar pinning and ordering are in the **Menu bar** tab; startup and connection settings are in **General**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection can add a small delay.
+
+Tally sends HTTP requests directly to the selected provider using the selected Account's credentials. It creates no OpenCode sessions or processes and requires no executable or auth-plugin path. The model picker reads the provider's current model list.
+
+The selected model never falls back to another model. A missing model or failed turn pauses warm-up and displays the reason in Settings. Reload models and choose a replacement, or toggle off and on to resume after fixing the error. Tally refreshes near-expiry tokens before collecting the quota needed for scheduling. A failed refresh rereads the stored credential and allows one retry.
+
+Eligibility follows current quota readings, not plan names. Accounts with only weekly or monthly windows show "Not needed" and send nothing. The enabled preference remains stored so a five-hour window appearing later can resume scheduling. Missing or stale quota data shows "Waiting for quota information". Exhausted applicable allowance and pending reset operations prevent sending. Grok currently reports only a weekly window in Tally.
+
+Warm-up runs only while Tally is running and the Mac is awake. Missed windows do not accumulate. Attempts are saved before sending; an interrupted attempt requires manual resumption. Tally sends each message once and does not replay ambiguous failures. Warm-up consumes subscription allowance and can be subject to provider restrictions; timing and prompt variation do not guarantee provider approval or prevent account suspension.
 
 ## On your phone
 

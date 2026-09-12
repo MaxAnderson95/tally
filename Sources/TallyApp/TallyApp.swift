@@ -23,6 +23,7 @@ final class Runtime: ObservableObject {
     @Published var resetOperations: [String: Redemption] = [:]
     @Published var resetErrors: [String: String] = [:]
     @Published var resetBusy: Set<String> = []
+    @Published var warmups: [String: WarmupStatus] = [:]
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -60,6 +61,7 @@ final class Runtime: ObservableObject {
                 await readResetState()
                 activity = await owner.activityResponse(range: activityRange)
                 storageError = await owner.settingsError()?.message
+                warmups = await owner.warmupStatuses()
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
@@ -354,6 +356,10 @@ struct AccountCard: View {
                 }
             }
             if account.provider == "openai" { OpenAICreditDetails(account: account, runtime: runtime) }
+            if let warmup = runtime.warmups[account.id], warmup.needsAttention {
+                Label("Auto warm-up: " + warmup.message, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if details {
                 if let state = account.command.state {
                     Text(state == "unknown" ? "Outcome unknown; open the card-header warning to acknowledge." : "Redeeming…").font(.caption)
@@ -414,11 +420,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 680),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "Tally Settings"
             window.isReleasedWhenClosed = false
-            window.contentMinSize = NSSize(width: 420, height: 360)
+            window.contentMinSize = NSSize(width: 500, height: 420)
             window.contentViewController = NSHostingController(rootView: TallySettings(runtime: runtime))
             window.center()
             settingsWindow = window
