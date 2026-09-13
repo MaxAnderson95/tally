@@ -30,6 +30,10 @@ public actor TallyOwner {
     private let warmupRunner = ProviderWarmup()
     private var warmupTask: Task<Void, Never>?
     private var warmingAccount: String?
+    private var switchingAccount = false
+    private var activateCredential: @Sendable (StoredCredential, String) async throws -> Void = { credential, path in
+        try await OpenCodeSelection().activate(credential, databasePath: path)
+    }
     var warmupSend: (@Sendable (WarmupRequest) async throws -> Void)?
     private var warmupModelList: (@Sendable (StoredCredential) async throws -> [WarmupModel])?
     var warmupJitter: @Sendable () -> TimeInterval = { Double.random(in: 1...1200) }
@@ -69,6 +73,7 @@ public actor TallyOwner {
          warmupSend: @escaping @Sendable (WarmupRequest) async throws -> Void = { _ in throw Fault("unexpected", "No test warm-up transport configured.") },
           warmupJitter: @escaping @Sendable () -> TimeInterval = { 600 },
           warmupModels: (@Sendable (StoredCredential) async throws -> [WarmupModel])? = nil,
+         activate: @escaping @Sendable (StoredCredential, String) async throws -> Void = { _, _ in throw Fault("unexpected", "No test Account switch configured.") },
          quitWait: Duration = .seconds(15),
          inventory: @escaping @Sendable () throws -> InventoryRead,
          collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
@@ -87,6 +92,7 @@ public actor TallyOwner {
         self.warmupSend = warmupSend
         self.warmupJitter = warmupJitter
         self.warmupModelList = warmupModels
+        self.activateCredential = activate
         self.quitWait = quitWait
     }
 
@@ -95,6 +101,7 @@ public actor TallyOwner {
         var inventory = inventory; inventory.age(at: now)
         let display = accounts.map { original in
             var account = original
+            if inventory.stale { account.active = nil }
             if let block = redemptions.block(accountID: account.id, target: credentials[account.id]?.evidence) {
                 account.command = CommandSummary(blockingOperationId: block.result.operationId, state: block.result.state.rawValue,
                                                  acknowledgementRequired: block.result.acknowledgementRequired)
@@ -135,6 +142,40 @@ public actor TallyOwner {
     }
 
     public func settingsError() -> Fault? { storageError }
+
+    public func activate(accountID: String) async throws -> AccountsResponse {
+        guard !stopping, !switchingAccount else {
+            throw Fault("account_switch_busy", "An Account switch is already running or Tally is shutting down.")
+        }
+        guard let selected = credentials[accountID] else { throw Fault("account_not_found", "Account not found. Refresh the inventory.") }
+        let namespace = databaseIdentity
+        inventory.stale = true
+        let current = try inventorySource()
+        guard current.databaseIdentity == namespace,
+              let credential = current.credentials.first(where: { $0.storedID == selected.storedID && $0.provider == selected.provider }),
+              credential.evidence.relation(to: selected.evidence) == .same else {
+            throw Fault("account_changed", "The Account changed. Refresh the inventory before switching.")
+        }
+        reconcile(current)
+        if credential.active { return snapshot() }
+        switchingAccount = true
+        inventory.stale = true
+        defer { switchingAccount = false }
+        do { try await activateCredential(credential, databasePath) }
+        catch {
+            // A lost response can follow a successful switch. Refresh state, but never replay the command.
+            if databaseIdentity == namespace, let latest = try? inventorySource(), latest.databaseIdentity == namespace { reconcile(latest) }
+            throw error
+        }
+        guard databaseIdentity == namespace else { throw Fault("account_changed", "Tally's database changed during the switch. Refresh the inventory.") }
+        let latest = try inventorySource()
+        guard latest.databaseIdentity == namespace else { throw Fault("account_changed", "OpenCode's database changed during the switch. Refresh the inventory.") }
+        reconcile(latest)
+        guard snapshot().accounts.first(where: { $0.id == accountID })?.active == true else {
+            throw Fault("account_switch_unconfirmed", "OpenCode accepted the switch, but the Account is no longer selected. Refresh Accounts before trying again.")
+        }
+        return snapshot()
+    }
 
     public func warmupStatuses() -> [String: WarmupStatus] {
         guard let databaseIdentity else { return [:] }
@@ -386,6 +427,7 @@ public actor TallyOwner {
                 namespace.records.append(IdentityRecord(evidence: credential.evidence, account: account, present: true))
             }
             account.name = credential.name
+            account.active = credential.active
             // Token rotation can replace the Account ID. Warm-up follows the stored row and workspace,
             // including its cooldown and interrupted-attempt state so rotation cannot replay a message.
             let warmupKey = identityDigest("\(credential.preferenceKey)\u{0}\(credential.workspace ?? "")")

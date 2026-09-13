@@ -71,6 +71,14 @@ public struct TallyResponder: HTTPResponder {
         }
         do {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+            if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "activate" {
+                guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST to activate an Account.")) }
+                let buffer = try await request.body.collect(upTo: 16_384)
+                guard let object = try JSONSerialization.jsonObject(with: Data(buffer.readableBytesView)) as? [String: Any], object.isEmpty else {
+                    throw Fault("invalid_request", "Account activation requires an empty JSON object.")
+                }
+                return try json(await owner.activate(accountID: String(parts[4])))
+            }
             if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "color" {
                 guard request.method == .put else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use PUT to save an Account color.")) }
                 let buffer = try await request.body.collect(upTo: 16_384)
@@ -174,7 +182,7 @@ public struct TallyResponder: HTTPResponder {
             switch fault.code {
             case "invalid_request", "warmup_model", "warmup_unnecessary": status = .badRequest
             case "account_not_found", "operation_not_found": status = .notFound
-            case "operation_conflict", "account_blocked": status = .conflict
+            case "operation_conflict", "account_blocked", "account_switch_busy", "account_changed": status = .conflict
             default: status = .serviceUnavailable
             }
             return failure(status, fault)

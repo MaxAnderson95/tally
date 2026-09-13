@@ -207,7 +207,7 @@ private struct ActivityDatabase {
         try execute("""
         CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT, time_created INTEGER);
         CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
-        CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER);
+        CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER, active INTEGER);
         INSERT INTO session_v2 VALUES ('parent',NULL,NULL,NULL,0), ('child','parent',NULL,NULL,0),
           ('fork',NULL,'parent','{"type":"through","messageID":"original"}',1000),
           ('orphan',NULL,'deleted',NULL,1000), ('nested',NULL,'fork','{"type":"before","messageID":"own"}',2000);
@@ -279,7 +279,7 @@ private struct ActivityDatabase {
 @Test func activityRemainsAvailableWhenCredentialSchemaFailsAndAccountsDisappear() async throws {
     let db = try ActivityDatabase(); defer { try? FileManager.default.removeItem(at: db.directory) }
     try db.add("retained", session: "parent", seq: 1, time: Int(Date().timeIntervalSince1970 * 1000) - 1000)
-    try db.execute("INSERT INTO credential VALUES ('account','Account','{\"type\":\"key\",\"key\":\"fixture\"}','opencode-go',0)")
+    try db.execute("INSERT INTO credential VALUES ('account','Account','{\"type\":\"key\",\"key\":\"fixture\"}','opencode-go',0,1)")
     let owner = TallyOwner(databasePath: db.path, appBuild: "test", storageURL: nil)
     try await owner.refresh(accountIDs: []); await owner.waitForCollection()
     #expect(await owner.snapshot().accounts.count == 1)

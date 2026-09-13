@@ -931,11 +931,114 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
     #expect(credentials.prefix(2).map(\.key) == ["key-a", "key-b"])
     #expect(credentials[2].expiresAt == Date(timeIntervalSince1970: 0))
     #expect(credentials[0].expiresAt == nil)
+    // OpenCode ranks active, creation time, then ID across all methods, before Tally filters subscriptions.
+    #expect(credentials.map(\.active) == [true, false, false, false, false, true])
     #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == before)
     #expect(throws: Fault.self) { try OpenCodeInventory(path: path + "-missing").read() }
     #expect(!FileManager.default.fileExists(atPath: path + "-missing"))
     #expect(OpenCodeInventory.defaultPath(environment: ["XDG_DATA_HOME": "/data", "OPENCODE_DB": "custom.db"], home: "/home") == "/data/opencode/custom.db")
     #expect(OpenCodeInventory.defaultPath(environment: ["OPENCODE_DB": "/custom.db"], home: "/home") == "/custom.db")
+}
+
+final class SelectionScenario: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = "a"
+    private var calls = 0
+    var loseResponse = false
+    func read() -> InventoryRead {
+        lock.withLock {
+            InventoryRead(databaseIdentity: "selection", credentials: ["a", "b"].map {
+                StoredCredential(storedID: $0, name: $0, key: "synthetic-" + $0, active: active == $0)
+            } + [StoredCredential(storedID: "other", name: "Other provider", key: "other", provider: "xai", active: true)])
+        }
+    }
+    func activate(_ credential: StoredCredential) throws {
+        try lock.withLock {
+            calls += 1; active = credential.storedID
+            if loseResponse { throw Fault("account_switch_unconfirmed", "Synthetic response loss") }
+        }
+    }
+    func count() -> Int { lock.withLock { calls } }
+    func owner() -> TallyOwner {
+        TallyOwner(clock: { Date() }, activate: { credential, _ in try self.activate(credential) }, inventory: { self.read() }, collect: { _ in throw Fault("unused", "No provider request expected") })
+    }
+}
+
+@Test func accountSelectionSharesOwnerAndDoesNotReplayLostResponses() async throws {
+    let scenario = SelectionScenario()
+    let owner = scenario.owner()
+    _ = try await owner.refresh(accountIDs: [])
+    let before = await owner.snapshot()
+    let target = try #require(before.accounts.first(where: { $0.name == "b" }))
+    let switched = try await owner.activate(accountID: target.id)
+    #expect(switched.accounts.filter { $0.active == true }.map(\.name).sorted() == ["Other provider", "b"])
+    #expect(switched.accounts.map(\.id) == before.accounts.map(\.id))
+    #expect(switched.accounts.map(\.pinned) == before.accounts.map(\.pinned))
+    _ = try await owner.activate(accountID: target.id)
+    #expect(scenario.count() == 1)
+    await #expect(throws: Fault.self) { try await owner.activate(accountID: "missing") }
+    #expect(scenario.count() == 1)
+    await owner.shutdown()
+
+    let lost = SelectionScenario(); lost.loseResponse = true
+    let lostOwner = lost.owner()
+    _ = try await lostOwner.refresh(accountIDs: [])
+    let lostTarget = try #require(await lostOwner.snapshot().accounts.first(where: { $0.name == "b" }))
+    await #expect(throws: Fault.self) { try await lostOwner.activate(accountID: lostTarget.id) }
+    #expect(await lostOwner.snapshot().accounts.first(where: { $0.id == lostTarget.id })?.active == true)
+    #expect(lost.count() == 1)
+    await lostOwner.shutdown()
+}
+
+@Test func accountSelectionUsesAuthenticatedOpenCodeAPIAndChecksDatabase() async throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let state = home.appendingPathComponent(".local/state/opencode")
+    let data = home.appendingPathComponent(".local/share/opencode")
+    try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+    let database = data.appendingPathComponent("opencode.db")
+    try Data().write(to: database)
+    try Data(#"{"url":"http://127.0.0.1:4096","password":"synthetic-password"}"#.utf8).write(to: state.appendingPathComponent("service.json"))
+    let credential = StoredCredential(storedID: "cred_test", name: "Test", key: "private")
+    let selection = OpenCodeSelection(environment: [:], home: home.path, send: { request in
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("opencode:synthetic-password".utf8).base64EncodedString())
+        #expect(request.httpBody == nil)
+        let url = try #require(request.url)
+        if request.httpMethod == "GET" {
+            #expect(url.path == "/api/integration/opencode-go")
+            return (Data(#"{"data":{"connections":[{"type":"credential","id":"cred_test"}]},"location":{}}"#.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        #expect(request.httpMethod == "POST")
+        #expect(url.path == "/api/credential/cred_test/activate")
+        return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+    })
+    try await selection.activate(credential, databasePath: database.path)
+    let other = home.appendingPathComponent("copy.db"); try Data().write(to: other)
+    await #expect(throws: Fault.self) { try await selection.activate(credential, databasePath: other.path) }
+    try FileManager.default.removeItem(at: state.appendingPathComponent("service.json"))
+    await #expect(throws: Fault.self) { try await selection.activate(credential, databasePath: database.path) }
+}
+
+@Test func accountSelectionSerializesCommandsAndHidesUnconfirmedState() async throws {
+    let scenario = SelectionScenario()
+    let (started, start) = AsyncStream<Void>.makeStream()
+    let (released, release) = AsyncStream<Void>.makeStream()
+    let owner = TallyOwner(clock: { Date() }, activate: { credential, _ in
+        start.yield(()); start.finish()
+        for await _ in released { break }
+        try scenario.activate(credential)
+    }, inventory: { scenario.read() }, collect: { _ in throw Fault("unused", "No provider requests expected") })
+    _ = try await owner.refresh(accountIDs: [])
+    let target = try #require(await owner.snapshot().accounts.first(where: { $0.name == "b" }))
+    let pending = Task { try await owner.activate(accountID: target.id) }
+    for await _ in started { break }
+    #expect(await owner.snapshot().accounts.allSatisfy { $0.active == nil })
+    await #expect(throws: Fault.self) { try await owner.activate(accountID: target.id) }
+    release.yield(()); release.finish()
+    #expect(try await pending.value.accounts.first(where: { $0.id == target.id })?.active == true)
+    #expect(scenario.count() == 1)
+    await owner.shutdown()
 }
 
 private final class Scenario: @unchecked Sendable {
@@ -1282,7 +1385,7 @@ private final class InventoryScenario: @unchecked Sendable {
         var db: OpaquePointer?
         #expect(sqlite3_open(path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
-        #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER); INSERT INTO credential VALUES ('same-row', 'Same', '{\"type\":\"key\",\"key\":\"same-key\"}', 'opencode-go', 1); CREATE TABLE message (incompatible TEXT);", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER, active INTEGER); INSERT INTO credential VALUES ('same-row', 'Same', '{\"type\":\"key\",\"key\":\"same-key\"}', 'opencode-go', 1, 1); CREATE TABLE message (incompatible TEXT);", nil, nil, nil) == SQLITE_OK)
     }
     try create(path)
     let owner = TallyOwner(databasePath: path, appBuild: "test", storageURL: directory.appendingPathComponent("state.json"))
@@ -1365,7 +1468,7 @@ private final class InventoryScenario: @unchecked Sendable {
     let path = directory.appendingPathComponent("opencode.db").path
     var db: OpaquePointer?
     #expect(sqlite3_open(path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER); INSERT INTO credential VALUES ('row', 'Go', '{\"type\":\"key\",\"key\":\"secret\"}', 'opencode-go', 1);", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER, active INTEGER); INSERT INTO credential VALUES ('row', 'Go', '{\"type\":\"key\",\"key\":\"secret\"}', 'opencode-go', 1, 1);", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let source = OpenCodeInventory(path: path)
     let (observations, continuation) = AsyncStream<GoObservation>.makeStream()

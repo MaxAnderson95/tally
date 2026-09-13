@@ -171,6 +171,17 @@ final class Runtime: ObservableObject {
         startServer()
     }
 
+    @Published var switchingAccount: String?
+
+    func activate(_ account: Account) async {
+        guard switchingAccount == nil else { return }
+        switchingAccount = account.id
+        defer { switchingAccount = nil }
+        do { snapshot = try await owner.activate(accountID: account.id); settingsError = nil }
+        catch let fault as Fault { settingsError = fault.message; snapshot = await owner.snapshot() }
+        catch { settingsError = "Account switch was not confirmed. Refresh Accounts before trying again." }
+    }
+
     func pin(_ account: Account) async {
         var ids = (snapshot?.accounts ?? []).filter(\.pinned).map(\.id)
         if account.pinned { ids.removeAll { $0 == account.id } }
@@ -318,6 +329,16 @@ struct AccountCard: View {
                 }
                 Button { details.toggle() } label: { Image(systemName: details ? "chevron.up" : "chevron.down") }
                     .buttonStyle(.plain).accessibilityLabel("Details for \(account.name)")
+            }
+            HStack {
+                if account.active == true {
+                    Label("Active in OpenCode", systemImage: "checkmark.circle").font(.caption)
+                } else {
+                    Button(runtime.switchingAccount == account.id ? "Switching…" : "Use in OpenCode") {
+                        Task { await runtime.activate(account) }
+                    }.font(.caption).disabled(runtime.switchingAccount != nil || account.active == nil)
+                    if account.active == nil { Text("Selection unavailable").font(.caption).foregroundStyle(.secondary) }
+                }
             }
             if let operation = runtime.resetOperations[account.id], operation.state != .pending,
                !operation.acknowledgementRequired || resetExplanation {

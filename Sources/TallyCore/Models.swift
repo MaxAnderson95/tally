@@ -126,6 +126,7 @@ public struct Account: Codable, Sendable, Identifiable {
     public var service = "opencode-go"
     public var name: String
     public var pinned = true
+    public var active: Bool? = nil
     @Null public var pinOrder: Int? = nil
     public var identityColorIndex = 0
     public var pin = Pin()

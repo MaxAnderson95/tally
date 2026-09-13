@@ -34,6 +34,8 @@ Click the menu bar glyph to open the popover. Tally refreshes on launch, on wake
 
 **Manage accounts in OpenCode.** Tally opens OpenCode's credential database read-only. OpenCode and its auth plugins own sign-in and token refresh. Tally uses the stored access token for usage collection, model discovery, and warm-up; it never refreshes tokens or writes to OpenCode's database. Collection works while OpenCode is stopped and stored tokens remain usable.
 
+**Switch accounts from Tally.** Native and web account cards show **Active in OpenCode** and a **Use in OpenCode** button for inactive accounts. The companion supports `{"action":"activate","accountId":"opaque-ID"}` after resolving the account with `accounts`. Switching requires the local OpenCode service and uses its activation API so OpenCode reloads provider state. It changes the selected account for that provider on the Mac running Tally. Pinning and collection remain independent of selection. Selection follows Tally's inventory refresh; an unavailable inventory shows selection as unknown.
+
 **Quota bars turn red when you are burning too fast.** A blue bar means your current pace fits inside the window. Red means your average usage projects that you will hit the limit before the window resets, and Tally shows how long you have. The small tick mark is the even-pace marker: where you would be if you spread the window evenly.
 
 **Pin what you care about.** Pinned accounts appear at the top and their percentages show directly in the menu bar. Everything else groups by provider below. Reorder accounts in Settings, and click an account's icon to change its color.

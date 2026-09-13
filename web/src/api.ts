@@ -15,6 +15,7 @@ export type QuotaWindow = {
 export type Account = {
   id: string; provider: string; service: string; name: string; pinned: boolean; pinOrder: number | null
   identityColorIndex: number
+  active?: boolean | null
   pin: { lines: { windowId: string; label: string; remainingPercent: number | null; stale: boolean }[]; warning: boolean }
   groups: {
     plan: Group<{ name: string }>; quotas: Group<{ windows: QuotaWindow[] }>
