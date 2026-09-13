@@ -98,7 +98,8 @@ struct OpenAIUsage: Sendable {
             let plan = payload.plan_type.flatMap { $0.isEmpty ? nil : Plan(name: plans[$0] ?? $0) }
             windows.sort { $0.durationSeconds != $1.durationSeconds ? ($0.durationSeconds ?? .infinity) < ($1.durationSeconds ?? .infinity) : $0.id < $1.id }
             guard Set(windows.map(\.id)).count == windows.count else { throw invalid() }
-            return [.plan(plan), .quotas(Quotas(windows: windows)), .extraUsage(nil), .balances(balances), .resetSummary(try payload.rate_limit_reset_credits?.normalized(source: "usage"))]
+            let quotas = keys?["rate_limit"] == nil ? nil : Quotas(windows: windows)
+            return [.plan(plan), .quotas(quotas), .extraUsage(nil), .balances(balances), .resetSummary(try payload.rate_limit_reset_credits?.normalized(source: "usage"))]
         } catch { throw invalid() }
     }
 

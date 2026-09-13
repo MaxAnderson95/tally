@@ -88,6 +88,24 @@ public struct TallyResponder: HTTPResponder {
                 else { try await owner.setUnpinnedOrder(input.accountIds) }
                 return try json(await owner.snapshot())
             }
+            if path == "/api/v1/warmups" {
+                guard request.method == .get else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use GET to read warm-up settings.")) }
+                return try json(await owner.warmupReadings())
+            }
+            if (parts.count == 6 || parts.count == 7), parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "warmup" {
+                _ = try await owner.account(id: String(parts[4]))
+                if parts.count == 7 {
+                    guard parts[6] == "models" else { return failure(.notFound, Fault("not_found", "API route not found.")) }
+                    guard request.method == .get else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use GET to load models.")) }
+                    return try json(await owner.warmupModels(accountID: String(parts[4])))
+                }
+                guard request.method == .put else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use PUT to save warm-up settings.")) }
+                let buffer = try await request.body.collect(upTo: 16_384)
+                struct Input: Decodable { var enabled: Bool; var model: String }
+                let input = try JSONDecoder().decode(Input.self, from: Data(buffer.readableBytesView))
+                try await owner.setWarmup(accountID: String(parts[4]), enabled: input.enabled, model: input.model)
+                return try json(await owner.warmupReadings())
+            }
             if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "redemptions" {
                 guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST to submit a redemption.")) }
                 let buffer = try await request.body.collect(upTo: 16_384)
@@ -154,7 +172,7 @@ public struct TallyResponder: HTTPResponder {
         } catch let fault as Fault {
             let status: HTTPResponse.Status
             switch fault.code {
-            case "invalid_request": status = .badRequest
+            case "invalid_request", "warmup_model", "warmup_unnecessary": status = .badRequest
             case "account_not_found", "operation_not_found": status = .notFound
             case "operation_conflict", "account_blocked": status = .conflict
             default: status = .serviceUnavailable

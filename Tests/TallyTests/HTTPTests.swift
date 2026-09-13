@@ -20,6 +20,56 @@ private struct AuthorityResponder: HTTPResponder {
     }
 }
 
+@Test func warmupWebSettingsShareOwnerAndEnforceEligibility() async throws {
+    let now = Date()
+    let owner = TallyOwner(clock: { now }, warmupModels: { credential in
+        [WarmupModel(id: credential.provider + "/cheap", name: "Cheap")]
+    }, inventory: {
+        InventoryRead(databaseIdentity: "web", credentials: [StoredCredential(storedID: "five-hour", name: "Five-hour", key: "synthetic"), StoredCredential(storedID: "weekly", name: "Weekly", key: "weekly", provider: "xai")])
+    }, collections: { credential in
+        [.go { GoObservation(windows: [QuotaWindow(id: "window", label: "Window", cadence: credential.provider == "xai" ? "weekly" : "rolling", durationSeconds: credential.provider == "xai" ? 604_800 : 18_000, durationSource: "provider", usedPercent: 0)]) }]
+    }, collect: { _ in throw Fault("unexpected", "Unused collector") })
+    await owner.tick(); await owner.waitForCollection()
+    let accounts = await owner.snapshot().accounts
+    let eligible = try #require(accounts.first(where: { $0.provider == "opencode-go" }))
+    let weekly = try #require(accounts.first(where: { $0.provider == "xai" }))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("<html>Tally fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    try await app.test(.router) { client in
+        let headers: HTTPFields = [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]
+        try await client.execute(uri: "/api/v1/warmups", method: .get, headers: headers) { response in
+            #expect(response.status == .ok)
+            let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
+            #expect(readings[eligible.id]?.unavailableReason == nil)
+            #expect(readings[weekly.id]?.unavailableReason == "No applicable five-hour window")
+            #expect(!String(buffer: response.body).contains("synthetic"))
+        }
+        let path = "/api/v1/accounts/\(eligible.id)/warmup"
+        try await client.execute(uri: path + "/models", method: .get, headers: headers) { response in
+            #expect(response.status == .ok)
+            let models = try Wire.decoder().decode([WarmupModel].self, from: Data(response.body.readableBytesView))
+            #expect(models.map(\.id) == ["opencode-go/cheap"])
+        }
+        try await client.execute(uri: path + "/models", method: .post, headers: headers) { #expect($0.status == .methodNotAllowed) }
+        try await client.execute(uri: path, method: .put, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json", .origin: "https://evil.example"], body: .init(string: "{\"enabled\":true,\"model\":\"opencode-go/cheap\"}")) { #expect($0.status == .forbidden) }
+        for enabled in [true, false] {
+            try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":\(enabled),\"model\":\"opencode-go/cheap\"}")) { response in
+                #expect(response.status == .ok)
+                let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
+                #expect(readings[eligible.id]?.enabled == enabled)
+                #expect(await owner.warmupStatuses()[eligible.id]?.enabled == enabled)
+            }
+        }
+        try await client.execute(uri: "/api/v1/accounts/\(weekly.id)/warmup", method: .put, headers: headers, body: .init(string: "{\"enabled\":true,\"model\":\"xai/cheap\"}")) { #expect($0.status == .badRequest) }
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":true}")) { #expect($0.status == .badRequest) }
+        try await client.execute(uri: "/api/v1/accounts/missing/warmup", method: .put, headers: headers, body: .init(string: "{}")) { #expect($0.status == .notFound) }
+    }
+    await owner.shutdown()
+}
+
 @Test func routesEnforcePolicyAndReadCachedState() async throws {
     let owner = TallyOwner(clock: { Date() }, inventory: {
         InventoryRead(databaseIdentity: "test-db", credentials: providerOrder.map {
