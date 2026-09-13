@@ -11,8 +11,10 @@ export function ColorPicker({ account, save, disabled }: { account: Account; sav
   const [open, setOpen] = useState(false)
   const container = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const options = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
+    options.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const outside = (event: PointerEvent) => { if (event.target instanceof Node && !container.current?.contains(event.target)) setOpen(false) }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); trigger.current?.focus() } }
     document.addEventListener('pointerdown', outside)
@@ -23,7 +25,7 @@ export function ColorPicker({ account, save, disabled }: { account: Account; sav
     <button ref={trigger} className="color-trigger" disabled={disabled} aria-label={`Change icon color for ${providerName(account.provider)} ${account.name}`} aria-expanded={open} onClick={() => setOpen(!open)}>
       <ProviderLogo provider={account.provider} color={account.identityColorIndex} />
     </button>
-    {open && <div className="color-options" role="group" aria-label="Icon color">
+    {open && <div ref={options} className="color-options" role="group" aria-label="Icon color">
       <p>Icon color</p><div>{colors.map((name, index) => <button key={name} disabled={disabled} aria-label={name} aria-pressed={account.identityColorIndex === index} onClick={async () => {
         if (await save({ kind: 'color', accountId: account.id, index })) { setOpen(false); trigger.current?.focus() }
       }}><ProviderLogo provider={account.provider} color={index} /></button>)}</div>
