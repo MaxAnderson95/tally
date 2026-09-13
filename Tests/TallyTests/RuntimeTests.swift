@@ -1103,6 +1103,7 @@ private final class InventoryScenario: @unchecked Sendable {
     let companionID = try #require(await owner.snapshot().accounts.last?.id)
     try await owner.setPins([companionID, original.id])
     try await owner.setIdentityColor(accountID: original.id, index: 4)
+    try await owner.setWarmup(accountID: original.id, enabled: true, model: provider + "/cheap")
     await owner.shutdown()
     credential.key = "rotated-access"; credential.refresh = "rotated-refresh"
     scenario.set([credential, companion])
@@ -1112,6 +1113,8 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(restored.id != original.id)
     #expect(restored.identityColorIndex == 4)
     #expect(restored.pinned && restored.pinOrder == 1)
+    #expect(await restarted.warmupStatuses()[restored.id]?.enabled == true)
+    #expect(await restarted.warmupStatuses()[restored.id]?.model == provider + "/cheap")
     #expect(await restarted.snapshot().accounts.filter(\.pinned).map(\.id) == [companionID, restored.id])
     credential.key = "live-access"; credential.refresh = "live-refresh"; credential.name = "Renamed"
     scenario.set([credential, companion])
@@ -1119,6 +1122,8 @@ private final class InventoryScenario: @unchecked Sendable {
     let rotated = try #require(await restarted.snapshot().accounts.first { $0.name == "Renamed" })
     #expect(rotated.id != restored.id)
     #expect(rotated.pinned && rotated.pinOrder == 1)
+    #expect(await restarted.warmupStatuses()[rotated.id]?.enabled == true)
+    try await restarted.setWarmup(accountID: rotated.id, enabled: false, model: provider + "/cheap")
     try await restarted.setPins([companionID])
     await restarted.shutdown()
     credential.key = "unpinned-access"; credential.refresh = "unpinned-refresh"
@@ -1129,11 +1134,70 @@ private final class InventoryScenario: @unchecked Sendable {
     try await unpinnedRestart.refresh(accountIDs: [])
     let other = try #require(await unpinnedRestart.snapshot().accounts.first { $0.name == "Unrelated" })
     #expect(!other.pinned && other.pinOrder == nil)
+    #expect(await unpinnedRestart.warmupStatuses()[other.id] == nil)
+    let disabled = try #require(await unpinnedRestart.snapshot().accounts.first { $0.name == "Renamed" })
+    #expect(await unpinnedRestart.warmupStatuses()[disabled.id]?.enabled == false)
     #expect(await unpinnedRestart.snapshot().accounts.filter(\.pinned).map(\.id) == [companionID])
     scenario.set([credential], database: "other-database")
     try await unpinnedRestart.refresh(accountIDs: [])
     #expect(await unpinnedRestart.snapshot().accounts.first?.identityColorIndex == 0)
+    #expect(await unpinnedRestart.warmupStatuses().isEmpty)
     await unpinnedRestart.shutdown()
+}
+
+@Test func warmupLegacySettingsRetainPausedAttemptsAcrossRotation() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("accounts.json")
+    let scenario = InventoryScenario()
+    var credential = StoredCredential(storedID: "stable-row", name: "Personal", key: "access", provider: "anthropic", refresh: "refresh")
+    scenario.set([credential])
+    let owner = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unused", "No collection expected") })
+    try await owner.refresh(accountIDs: [])
+    let original = try #require(await owner.snapshot().accounts.first?.id)
+    try await owner.setWarmup(accountID: original, enabled: true, model: "anthropic/haiku")
+    await owner.shutdown()
+    var legacy = AccountIdentityStore(url: storage)
+    let namespace = try #require(legacy.state.namespaces.keys.first)
+    var paused = try #require(legacy.state.namespaces[namespace]?.warmups?[original])
+    paused.lastAttemptAt = Date(timeIntervalSince1970: 1_900_000_000)
+    paused.nextAt = Date(timeIntervalSince1970: 1_900_018_000)
+    paused.suspended = true
+    paused.message = "Interrupted message; resume explicitly"
+    paused.promptIndex = 3
+    legacy.state.namespaces[namespace]?.warmups?[original] = paused
+    legacy.state.namespaces[namespace]?.warmupAccountsByCredential = nil
+    try legacy.save()
+    let migrated = TallyOwner(clock: { Date() }, storageURL: storage, warmupSend: { _ in Issue.record("Rotating tokens must not replay a paused attempt") }, inventory: { try scenario.read() }, collect: { _ in throw Fault("unused", "No collection expected") })
+    try await migrated.refresh(accountIDs: [])
+    #expect(await migrated.warmupStatuses()[original] == paused)
+    credential.key = "new-access"; credential.refresh = "new-refresh"
+    scenario.set([credential])
+    try await migrated.refresh(accountIDs: [])
+    let rotated = try #require(await migrated.snapshot().accounts.first?.id)
+    #expect(rotated != original)
+    #expect(await migrated.warmupStatuses()[rotated] == paused)
+    #expect(await migrated.warmupStatuses()[original] == nil)
+    await migrated.tick(); await migrated.waitForWarmup()
+    #expect(await migrated.warmupReadings()[rotated]?.needsAttention == true)
+    await migrated.shutdown()
+}
+
+@Test func warmupRowMappingDoesNotCrossOpenAIWorkspaces() async throws {
+    let scenario = InventoryScenario()
+    var credential = StoredCredential(storedID: "stable-row", name: "Selected", key: "access", provider: "openai", workspace: "personal")
+    scenario.set([credential])
+    let owner = TallyOwner(clock: { Date() }, inventory: { try scenario.read() }, collect: { _ in throw Fault("unused", "No collection expected") })
+    try await owner.refresh(accountIDs: [])
+    let original = try #require(await owner.snapshot().accounts.first?.id)
+    try await owner.setWarmup(accountID: original, enabled: true, model: "openai/small")
+    credential.workspace = "work"
+    scenario.set([credential])
+    try await owner.refresh(accountIDs: [])
+    let changed = try #require(await owner.snapshot().accounts.first?.id)
+    #expect(changed != original)
+    #expect(await owner.warmupReadings()[changed]?.enabled == false)
+    await owner.shutdown()
 }
 
 @Test func unpinnedOrderSurvivesRestartAndTokenRotation() async throws {

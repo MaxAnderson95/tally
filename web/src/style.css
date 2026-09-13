@@ -1,7 +1,7 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   color: #1d1d1f; background: #f5f5f7; color-scheme: light dark;
-  --surface: #fff; --muted: #6e6e73; --line: #dedee3; --track: #e8e8ed;
+  --surface: #fff; --settings-inset: #f5f5f7; --muted: #6e6e73; --line: #dedee3; --track: #e8e8ed;
   --quota-blue: #007aff; --quota-red: #d70015;
   --mono: #1d1d1f; --cobalt: #2456e6; --tangerine: #d96d0b; --moss: #1e8a4c; --plum: #8b3fc9; --rose: #cf2f5a;
   font-variant-numeric: tabular-nums; font-size: 14px; line-height: 1.5;
@@ -102,19 +102,28 @@ body:has(dialog[open]) { overflow: hidden; }
 .settings-sections button[aria-pressed="true"] { background: var(--surface); color: var(--mono); }
 .warmup-preferences { margin-bottom: 24px; }
 .warmup-intro { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-.warmup-provider + .warmup-provider { margin-top: 24px; }
-.warmup-provider h3 { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.warmup-provider + .warmup-provider { margin-top: 28px; }
+.warmup-provider h3 { display: flex; align-items: center; gap: 10px; margin: 0 2px 10px; font-size: 16px; }
 .warmup-provider .logo, .warmup-provider .logo svg { width: 18px; height: 18px; }
-.warmup-account { padding: 8px 0; }
+.warmup-accounts { padding: 0 16px; background: var(--settings-inset); border: 1px solid var(--line); border-radius: 10px; }
+.warmup-account { padding: 12px 0; }
 .warmup-account + .warmup-account { border-top: 1px solid var(--line); }
 .warmup-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; cursor: pointer; }
 .warmup-toggle:has(input:disabled) { color: var(--muted); cursor: default; }
 .warmup-toggle > span { min-width: 0; overflow-wrap: anywhere; }
+.warmup-toggle strong { display: block; font-size: 14px; font-weight: 600; }
+.warmup-toggle small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
 .warmup-toggle input { width: 18px; height: 18px; margin: 0 4px; accent-color: var(--quota-blue); flex-shrink: 0; }
-.warmup-model { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 16px; margin: 4px 0 8px; }
+.warmup-options { margin: 12px 0 4px 12px; padding-left: 12px; border-left: 2px solid var(--line); }
+.warmup-model { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 12px; }
 .warmup-model > span { font-size: 12px; color: var(--muted); }
 .warmup-model select { font: inherit; font-size: 14px; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; min-width: 0; width: 100%; min-height: 44px; padding: 8px; }
 .warmup-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.warmup-unavailable { margin-top: 4px; }
+.warmup-schedule { grid-template-columns: max-content minmax(0, 1fr); gap: 12px; font-size: 12px; margin: 0; }
+.warmup-schedule dt { white-space: nowrap; }
+.warmup-schedule time { display: grid; gap: 2px; }
+.warmup-schedule time > span + span { color: var(--muted); }
 .warmup-account .account-error { overflow-wrap: anywhere; }
 .warmup-account .account-error button { margin-left: 6px; font-size: 12px; }
 @media (max-width: 480px) {
@@ -210,5 +219,5 @@ dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   .provider-breakdown > details > summary span + span { float: none; display: block; margin-left: 14px; }
 }
 @media (prefers-color-scheme: dark) {
-  :root { color: #f5f5f7; background: #1c1c1e; --surface: #272729; --muted: #a1a1a6; --line: #3c3c3f; --track: #3b3b3e; --mono: #f5f5f7; --cobalt: #7d9bff; --tangerine: #ffa24a; --moss: #4fd08a; --plum: #c58bf2; --rose: #ff7e9e; --quota-blue: #0a84ff; --quota-red: #ff453a; }
+  :root { color: #f5f5f7; background: #1c1c1e; --surface: #272729; --settings-inset: #303032; --muted: #a1a1a6; --line: #3c3c3f; --track: #3b3b3e; --mono: #f5f5f7; --cobalt: #7d9bff; --tangerine: #ffa24a; --moss: #4fd08a; --plum: #c58bf2; --rose: #ff7e9e; --quota-blue: #0a84ff; --quota-red: #ff453a; }
 }

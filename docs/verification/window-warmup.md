@@ -102,3 +102,18 @@ Local checks:
 Browser checks covered automatic model discovery for seven synthetic accounts, enable/model selection, disabling, failed-save rollback, model-list retry, paused-attempt Resume, the account-card warning, retained schedule dates during unavailable quota, pinning/reordering/color changes, account technical details, reset cancel/confirm/unknown acknowledgement, all activity ranges, source details, explicit provider refresh confirmation, and disconnection/recovery. Screenshots were inspected for account cards, both Settings sections, and activity; page and dialog horizontal-overflow assertions passed at every width.
 
 The Playwright MCP server failed to start, so the audit used an already-installed local Playwright runner. No dependency was added. WebKit was not installed; Safari and physical iPhone behavior remain unverified.
+
+## Warm-up persistence and Settings hierarchy follow-up
+
+Two regressions were reproduced after Max reported Anthropic Personal repeatedly turning off:
+
+- `bash scripts/test-swift.sh --filter chosenPreferencesSurviveRestartWithRotatedCredentials` failed because rotating both OAuth tokens creates a new Account ID while the saved warm-up remains keyed by the retired ID. The live settings file also contained enabled warm-ups for several retired Anthropic Personal IDs.
+- A Playwright fixture with `enabled: true` and a change to `unavailableReason: "Waiting for quota information"` failed its checked-state assertion. The browser mixed the saved preference with quota availability; the native checkbox used the same condition.
+
+The optional `warmupAccountsByCredential` mapping in each settings namespace associates the hashed OpenCode row/workspace key with its current Account ID. Reconciliation moves the complete warm-up state when that ID changes, preserving the selected model, scheduling delay, last attempt, prompt history, and paused state. Existing settings acquire the mapping when their current credentials are reconciled. Other rows, databases, and OpenAI workspaces do not inherit warming. Retired identities remain separate for reset-command recovery.
+
+Native and browser checkboxes display the saved preference independently of quota availability. An enabled account can be turned off while waiting; an ineligible off account cannot be enabled. Browser Settings keeps the selected model visible, labels the waiting condition separately, and groups account rows under provider headings with indented model/schedule details.
+
+`bash scripts/test-swift.sh` passed 88 tests, including token rotation across restart, legacy settings migration, paused-attempt preservation without resend, and OpenAI workspace isolation. `npm --prefix web test` passed 20 tests; the web production build passed. Playwright checked the actual browser implementation with synthetic API fixtures at 390px/dark, 320px/light, and 1200px/light, covering unavailable quota, disabling while waiting, failed-save rollback, reopening Settings, and overflow. The checkbox assertion failed before the change and passed afterward.
+
+The complete signed bundle was installed at `~/Applications/Tally.app` as `83925e7-20260913141113`, including this then-uncommitted follow-up. The live API reported ready; Anthropic Personal retained `enabled: true`, `anthropic/claude-haiku-4-5-20251001`, and its existing next-at timestamp across replacement. The saved settings contained seven row/workspace mappings. These live checks were read-only; browser interactions and token rotations used synthetic fixtures. No real reset credits were used. Normal previously enabled warm-up scheduling continues in the installed app.

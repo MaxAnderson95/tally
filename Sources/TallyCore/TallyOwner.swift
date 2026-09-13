@@ -362,6 +362,7 @@ public actor TallyOwner {
         enterNamespace(incoming.databaseIdentity)
         cacheAccounts()
         var namespace = store.state.namespaces[incoming.databaseIdentity]!
+        if namespace.warmupAccountsByCredential == nil { namespace.warmupAccountsByCredential = [:] }
         var nextAccounts: [Account] = []
         var nextCredentials: [String: StoredCredential] = [:]
         let sorted = incoming.credentials.sorted {
@@ -385,6 +386,14 @@ public actor TallyOwner {
                 namespace.records.append(IdentityRecord(evidence: credential.evidence, account: account, present: true))
             }
             account.name = credential.name
+            // Token rotation can replace the Account ID. Warm-up follows the stored row and workspace,
+            // including its cooldown and interrupted-attempt state so rotation cannot replay a message.
+            let warmupKey = identityDigest("\(credential.preferenceKey)\u{0}\(credential.workspace ?? "")")
+            if let previousID = namespace.warmupAccountsByCredential?[warmupKey], previousID != account.id,
+               let warmup = namespace.warmups?.removeValue(forKey: previousID) {
+                namespace.warmups?[account.id] = warmup
+            }
+            namespace.warmupAccountsByCredential?[warmupKey] = account.id
             // Cosmetic preferences follow the OpenCode row, independently of credential identity.
             account.identityColorIndex = namespace.colorsByCredential?[credential.preferenceKey] ?? account.identityColorIndex
             if let pinnedOrder = namespace.pinnedOrder, namespace.initialized {

@@ -108,21 +108,20 @@ private struct WarmupSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(account.name, isOn: Binding(get: { enabled && availability.reason == nil }, set: { value in
+            Toggle(account.name, isOn: Binding(get: { enabled }, set: { value in
                 enabled = value
                 if !value || models.contains(where: { $0.id == selected }) {
                     Task { await save() }
                 }
             }))
             .toggleStyle(.checkbox)
-            .disabled(saving || availability.reason != nil)
+            .disabled(saving || (!enabled && availability.reason != nil))
 
             if let reason = availability.reason {
                 Label(reason, systemImage: "info.circle")
                     .font(.caption).foregroundStyle(.secondary)
-                if enabled && availability == .unknown { schedule }
             }
-            if enabled && (availability.reason == nil || WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason == nil) {
+            if enabled {
                 if loading {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -139,7 +138,7 @@ private struct WarmupSettings: View {
                         }
                         ForEach(models) { model in Text(model.name).tag(model.id) }
                     }
-                    .disabled(saving || models.isEmpty)
+                    .disabled(saving || models.isEmpty || WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason != nil)
                 }
                 if let error {
                     HStack(alignment: .top) {

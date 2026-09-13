@@ -71,9 +71,9 @@ export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { a
     {['anthropic', 'openai', 'opencode-go', 'xai'].map(provider => {
       const matches = accounts.filter(account => account.provider === provider)
       return matches.length > 0 && <section className="warmup-provider" key={provider} aria-label={providerName(provider)}>
-        <h3><ProviderLogo provider={provider} color={0} />{providerName(provider)}</h3>
-        {matches.map(account => <WarmupAccount key={account.id} account={account} status={readings?.[account.id]} timezone={timezone} disabled={disabled || !!error || warmups.saving}
-          save={(enabled, model) => warmups.save(account.id, enabled, model)} />)}
+        <h3><span aria-hidden="true"><ProviderLogo provider={provider} color={0} /></span>{providerName(provider)}</h3>
+        <div className="warmup-accounts">{matches.map(account => <WarmupAccount key={account.id} account={account} status={readings?.[account.id]} timezone={timezone} disabled={disabled || !!error || warmups.saving}
+          save={(enabled, model) => warmups.save(account.id, enabled, model)} />)}</div>
       </section>
     })}
   </div>
@@ -123,8 +123,9 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
   const checkboxID = `warmup-${account.id}`
   return <div className="warmup-account">
     <label className="warmup-toggle" htmlFor={checkboxID}>
-      <span>{account.name}</span>
-      <input id={checkboxID} type="checkbox" checked={enabled && !unavailable} disabled={disabled || saving || !status || !!unavailable}
+      <span><strong>{account.name}</strong><small>{saving ? 'Saving…' : !status ? 'Loading…' : enabled ? !status.enabled ? 'Choose a model' : status.needsAttention ? 'Needs attention' : unavailable ? 'Waiting' : 'On' : 'Off'}</small></span>
+      <input id={checkboxID} type="checkbox" checked={enabled} disabled={disabled || saving || !status || (!enabled && !!unavailable)}
+        aria-label={`Warm-up for ${providerName(account.provider)} ${account.name}`}
         aria-describedby={unavailable ? `${checkboxID}-reason` : undefined}
         onChange={event => {
           const next = event.target.checked
@@ -132,10 +133,10 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
           if (!next || models.some(model => model.id === selected)) void change(next, selected)
         }} />
     </label>
-    {unavailable && <p className="warmup-status" id={`${checkboxID}-reason`}>{unavailable}</p>}
-    {enabled && !unavailable && <>
+    {unavailable && <p className="warmup-status warmup-unavailable" id={`${checkboxID}-reason`}>{unavailable}{enabled ? '. Your preference is saved.' : ''}</p>}
+    {enabled && <div className="warmup-options">
       <label className="warmup-model"><span>Model</span>
-        <select value={selected} disabled={disabled || saving || loading || !models.length} aria-label={`Warm-up model for ${providerName(account.provider)} ${account.name}`}
+        <select value={selected} disabled={disabled || saving || loading || !models.length || !!unavailable} aria-label={`Warm-up model for ${providerName(account.provider)} ${account.name}`}
           onChange={event => { setSelected(event.target.value); void change(true, event.target.value) }}>
           <option value="" disabled>{loading ? 'Loading models…' : 'Choose a model'}</option>
           {selected && !models.some(model => model.id === selected) && <option value={selected} disabled>{selected}{loading ? '' : ' (unavailable)'}</option>}
@@ -145,8 +146,8 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
       {loading && <p className="warmup-status" role="status">Loading models…</p>}
       {!status?.enabled && !error && <p className="warmup-status">Choose a model to start warming.</p>}
       {status?.needsAttention && <p className="account-error" role="status">{status.message} <button disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected)}>Resume</button></p>}
-    </>}
-    {status?.enabled && timestamp && <p className="warmup-status">{timestamp.label}: <time dateTime={timestamp.date}>{new Date(timestamp.date).toLocaleString(undefined, { timeZone: timezone, dateStyle: 'medium', timeStyle: 'short' })}</time></p>}
+      {status?.enabled && timestamp && <dl className="warmup-schedule"><dt>{timestamp.label}</dt><dd><time dateTime={timestamp.date}><span>{new Date(timestamp.date).toLocaleDateString(undefined, { timeZone: timezone, dateStyle: 'medium' })}</span><span>{new Date(timestamp.date).toLocaleTimeString(undefined, { timeZone: timezone, timeStyle: 'short' })}</span></time></dd></dl>}
+    </div>}
     {error && (enabled || saving) && <p className="account-error" role="alert">{error} <button disabled={loading || saving} onClick={() => setAttempt(attempt + 1)}>Retry</button></p>}
     {saveError && <p className="account-error" role="alert">{saveError}</p>}
   </div>

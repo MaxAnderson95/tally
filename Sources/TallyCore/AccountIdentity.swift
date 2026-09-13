@@ -38,6 +38,7 @@ struct InventoryNamespace: Codable {
     var records: [IdentityRecord] = []
     var activity: [String: Group<ActivityData>]? = nil
     var warmups: [String: WarmupStatus]? = nil
+    var warmupAccountsByCredential: [String: String]? = nil
 }
 
 struct AccountIdentityStore {
