@@ -217,15 +217,22 @@ struct Dashboard: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Image(nsImage: NSApplication.shared.applicationIconImage).resizable()
-                        .frame(width: 24, height: 24).accessibilityHidden(true)
-                    Text("Tally").font(.title2.bold())
-                    Spacer()
-                    if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
-                        Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                    Button("Refresh") { Task { await runtime.refresh() } }
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Image(nsImage: NSApplication.shared.applicationIconImage).resizable()
+                                .frame(width: 24, height: 24).accessibilityHidden(true)
+                            Text("Tally").font(.title2.bold())
+                        }
+                        if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
+                            Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Button { Task { await runtime.refresh() } } label: { Text("Refresh").frame(width: 64) }
+                        Button(action: showSettings) { Text("Settings").frame(width: 64) }
+                    }
                 }
                 if let error = runtime.listenerError {
                     Text(error).font(.caption)
@@ -252,7 +259,6 @@ struct Dashboard: View {
                 RecordedActivity(runtime: runtime)
                 Divider()
                 HStack {
-                    Button("Settings", action: showSettings)
                     Spacer()
                     Button("Quit Tally") { NSApplication.shared.terminate(nil) }
                 }
@@ -420,12 +426,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 680),
+            let size = NSSize(width: 720, height: 860)
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "Tally Settings"
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 500, height: 420)
             window.contentViewController = NSHostingController(rootView: TallySettings(runtime: runtime))
+            window.setContentSize(size)
             window.center()
             settingsWindow = window
         }

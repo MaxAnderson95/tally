@@ -8,8 +8,9 @@ import { useResetControls } from './ResetControls'
 import { QuotaRow } from './QuotaRow'
 import { AccountPreferences, ColorPicker, type PreferenceChange } from './AccountPreferences'
 import { PullToReload } from './PullToReload'
+import { useWarmups } from './WarmupPreferences'
 
-function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean }) {
+function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving, warmupWarning }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean; warmupWarning?: string }) {
   const quota = account.groups.quotas
   const windows = overviewWindows(account)
   const extra = account.groups.extraUsage
@@ -31,6 +32,7 @@ function AccountCard({ account, timezone, disconnected, inventoryError, now, sav
       <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}><span className="card-chevron" aria-hidden="true">⌃</span></button>
     </header>
     {resets.result}
+    {warmupWarning && <p className="account-error" role="status">Auto warm-up: {warmupWarning} Open Settings to review.</p>}
     {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
     {windows.map(window => <QuotaRow key={window.id} window={window} stale={disconnected || groupIsStale(quota, now)} now={now} />)}
     {(account.provider === 'anthropic' || account.provider === 'xai') && <section className="quota" aria-label={account.provider === 'xai' ? 'PAYG' : 'Extra usage'}>
@@ -86,7 +88,7 @@ function AccountCard({ account, timezone, disconnected, inventoryError, now, sav
       {windows.map(window => <div className="detail-window" key={window.id}>
         <dt>{window.label} scope</dt><dd>{window.scopeNote ?? window.scope}</dd>
         <dt>{window.label} used</dt><dd>{window.usedPercent === null ? '?' : `${window.usedPercent}%`}</dd>
-        <dt>Exact reset</dt><dd>{exact(window.resetAt)}</dd>
+        <dt>Exact reset</dt><dd>{window.resetState === 'not_started' ? 'Not started' : exact(window.resetAt)}</dd>
         <dt>Pacing</dt><dd>{window.pacing ? `${Math.round(window.pacing.projectedUsedPercent)}% projected at reset` : window.pacingUnavailableReason}</dd>
         {window.pacing && <><dt>Spare allowance</dt><dd>{window.pacing.sparePercent.toFixed(1)}%</dd><dt>Average-rate run-out</dt><dd>{window.pacing.runOutAt ? exact(window.pacing.runOutAt) : window.pacing.runOutReason}</dd></>}
       </div>)}
@@ -105,6 +107,7 @@ function App() {
   const [schedule, setSchedule] = useState<RefreshResponse>()
   const [activityObserved, setActivityObserved] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
+  const warmups = useWarmups()
   const build = useRef<string>(undefined)
   const refreshDialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
@@ -174,16 +177,17 @@ function App() {
     <nav className="view-switcher" aria-label="Dashboard view"><button aria-pressed={view === 'accounts'} onClick={() => setView('accounts')}>Accounts{data && <span>{data.accounts.length}</span>}</button><button aria-pressed={view === 'activity'} onClick={() => setView('activity')}>Activity</button><button className="settings-button" disabled={!data} onClick={() => setSettingsOpen(true)}>Settings</button></nav>
     {preferenceError && <p className="notice" role="alert">{preferenceError}</p>}
     {error && <p className="notice" role="alert">{error} Displayed readings may be stale.</p>}
+    {warmups.error && <p className="notice" role="alert">{warmups.error} Warm-up status may be out of date.</p>}
     {data?.status.inventory.error && <p className="notice" role="alert">{data.status.inventory.error.message}</p>}
     <div className="account-region" hidden={view !== 'accounts'}>
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
       {pinned && <div className="section-heading"><h2>Pinned</h2><span>{data.accounts.filter(account => account.pinned).length} accounts</span></div>}
-      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} />)}</div>
+      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} warmupWarning={warmups.readings?.[account.id]?.needsAttention ? warmups.readings[account.id].message : undefined} />)}</div>
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}
     </div><div hidden={view !== 'activity'}><RecordedActivity refresh={schedule} onObserved={setActivityObserved} /></div>
-    <AccountPreferences accounts={data?.accounts ?? []} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} />
+    <AccountPreferences accounts={data?.accounts ?? []} timezone={data?.status.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} warmups={warmups} />
     <dialog ref={refreshDialog} className="refresh-dialog" aria-labelledby="refresh-title" onClick={event => { if (event.target === event.currentTarget) refreshDialog.current?.close() }}>
       <form method="dialog" onSubmit={event => { event.preventDefault(); refreshDialog.current?.close(); void refresh() }}>
         <h2 id="refresh-title">Refresh provider usage?</h2>

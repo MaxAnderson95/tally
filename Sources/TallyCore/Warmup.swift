@@ -1,8 +1,18 @@
 import Foundation
 
-public struct WarmupModel: Sendable, Identifiable, Equatable {
+public struct WarmupModel: Codable, Sendable, Identifiable, Equatable {
     public var id: String
     public var name: String
+}
+
+public struct WarmupReading: Codable, Sendable {
+    public var enabled: Bool
+    public var model: String
+    @Null public var nextAt: Date?
+    @Null public var lastAttemptAt: Date?
+    public var message: String
+    public var needsAttention: Bool
+    @Null public var unavailableReason: String?
 }
 
 public enum WarmupAvailability: Sendable {

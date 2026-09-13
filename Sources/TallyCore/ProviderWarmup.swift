@@ -1,6 +1,15 @@
 import Foundation
 
 struct ProviderWarmup: Sendable {
+    private enum Format { case messages, responses, chat }
+
+    private static func format(provider: String, model: String) -> Format {
+        if provider == "anthropic" { return .messages }
+        if provider == "openai" { return .responses }
+        // Go's OpenAI/xAI model families use Responses; its default provider is chat-compatible.
+        if provider == "opencode-go" && (model.hasPrefix("gpt-") || model.hasPrefix("grok-")) { return .responses }
+        return .chat
+    }
     var transport: @Sendable (URLRequest) async throws -> ResetHTTPResponse = { try await SingleSendHTTP.send($0) }
 
     func models(_ credential: StoredCredential) async throws -> [WarmupModel] {
@@ -44,27 +53,25 @@ struct ProviderWarmup: Sendable {
     }
 
     func send(_ input: WarmupRequest) async throws {
-        guard try await models(input.credential).contains(where: { $0.id == input.model }) else {
-            throw Fault("warmup_model_unavailable", "Selected model is no longer available. Choose another warm-up model.")
-        }
         let model = String(input.model.dropFirst(input.credential.provider.count + 1))
+        let format = Self.format(provider: input.credential.provider, model: model)
         let sessionID = UUID().uuidString
         var body: [String: Any]
         let path: String
-        switch input.credential.provider {
-        case "anthropic":
+        switch format {
+        case .messages:
             path = "messages?beta=true"
             body = ["model": model, "max_tokens": 64, "stream": true, "messages": [["role": "user", "content": [["type": "text", "text": input.prompt]]]],
                     "system": [
                         ["type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.257.1a0; cc_entrypoint=sdk-cli;"],
                         ["type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."]
                     ]]
-        case "openai", "opencode-go":
+        case .responses:
             path = "responses"
             body = ["model": model, "store": false, "stream": true, "instructions": "Answer in one short sentence. Do not use tools.",
                     "tool_choice": "auto", "parallel_tool_calls": false, "include": ["reasoning.encrypted_content"], "prompt_cache_key": sessionID,
                     "input": [["role": "user", "content": [["type": "input_text", "text": input.prompt]]]]]
-        default:
+        case .chat:
             path = "chat/completions"
             body = ["model": model, "max_tokens": 64, "stream": false,
                     "messages": [["role": "user", "content": input.prompt]]]
@@ -74,7 +81,7 @@ struct ProviderWarmup: Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if ["openai", "opencode-go"].contains(input.credential.provider) { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
+        if format == .responses { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
         if input.credential.provider == "openai" {
             request.setValue(sessionID, forHTTPHeaderField: "session-id")
             request.setValue("remote_compaction_v2", forHTTPHeaderField: "x-codex-beta-features")
@@ -89,10 +96,11 @@ struct ProviderWarmup: Sendable {
         }
         let response = try await transport(request)
         try check(response)
-        try Self.confirm(response.body, provider: input.credential.provider)
+        try Self.confirm(response.body, provider: input.credential.provider, model: model)
     }
 
-    static func confirm(_ data: Data, provider: String) throws {
+    static func confirm(_ data: Data, provider: String, model: String = "") throws {
+        let format = Self.format(provider: provider, model: model)
         struct Response: Decodable {
             var type: String?; var stop_reason: String?; var response: Completion?; var choices: [Choice]?; var delta: Delta?
             struct Delta: Decodable { var stop_reason: String? }
@@ -101,7 +109,7 @@ struct ProviderWarmup: Sendable {
         }
         let decoder = JSONDecoder()
         let confirmed: Bool
-        if ["openai", "opencode-go", "anthropic"].contains(provider) {
+        if format != .chat {
             let events = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).filter { $0.hasPrefix("data:") }
                 .compactMap { try? decoder.decode(Response.self, from: Data($0.dropFirst(5).utf8)) }
             if provider != "anthropic" {

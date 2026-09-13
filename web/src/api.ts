@@ -51,6 +51,11 @@ export type Status = {
 export type AccountsResponse = { status: Status; accounts: Account[] }
 export type Schedule = { state: 'started' | 'joined' | 'deferred' | 'blocked'; nextAttemptAt: string | null; reason: Fault | null }
 export type RefreshResponse = { accounts: { accountId: string; schedule: Schedule }[]; activity: Schedule }
+export type WarmupModel = { id: string; name: string }
+export type WarmupReading = {
+  enabled: boolean; model: string; nextAt: string | null; lastAttemptAt: string | null
+  message: string; needsAttention: boolean; unavailableReason: string | null
+}
 export type Redemption = {
   operationId: string; accountId: string; accountName: string
   requestedCreditId: string | null; selectedCreditId: string | null

@@ -215,6 +215,10 @@ private final class WarmupScenario: @unchecked Sendable {
     await restarted.tick(); await restarted.waitForCollection(); await restarted.tick()
     #expect(await restarted.warmupStatuses()[id]?.suspended == true)
     #expect(scenario.sends() == ["selected"])
+    try await restarted.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap")
+    #expect(await restarted.warmupStatuses()[id]?.suspended == false)
+    #expect(await restarted.warmupReadings()[id]?.needsAttention == false)
+    #expect(scenario.sends() == ["selected"])
     await restarted.shutdown()
 }
 
@@ -225,36 +229,40 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
 }
 
-@Test func warmupRefreshPersistsOnlySelectedTokensAndRejectsLostUpdates() throws {
+@Test func warmupModelLoadingReadsLatestTokenWithoutWritingDatabase() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
     defer { try? FileManager.default.removeItem(at: root) }
     let source = root.appendingPathComponent("source.db")
     let schema = "CREATE TABLE credential (id TEXT, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER, time_updated INTEGER);"
     try warmupDatabase(source, sql: schema + "INSERT INTO credential VALUES ('selected', 'openai', 'Selected', '{\"type\":\"oauth\",\"methodID\":\"chatgpt-browser\",\"access\":\"synthetic\",\"refresh\":\"must-stay-in-source\",\"expires\":4102444800000}', 0, 1, 1); INSERT INTO credential VALUES ('other', 'opencode-go', 'Other', '{\"type\":\"key\",\"key\":\"other\"}', 1, 1, 1);")
-    let selected = try #require(OpenCodeInventory(path: source.path).read().credentials.first(where: { $0.storedID == "selected" }))
-    var refreshed = selected; refreshed.key = "fresh"; refreshed.refresh = "rotated"
-    try WarmupCredentials.persist(refreshed, replacing: selected, path: source.path)
-    let current = try OpenCodeInventory(path: source.path).read().credentials
-    #expect(current.count == 2)
-    #expect(current.first(where: { $0.storedID == "selected" })?.key == "fresh")
-    #expect(current.first(where: { $0.storedID == "selected" })?.name == "Selected")
-    #expect(current.first(where: { $0.storedID == "other" })?.key == "other")
-    #expect(throws: Fault.self) { try WarmupCredentials.persist(refreshed, replacing: selected, path: source.path) }
+    let owner = TallyOwner(clock: { Date() }, warmupModels: { credential in
+        #expect(credential.key == "updated-by-opencode")
+        return [WarmupModel(id: "openai/cheap", name: "Cheap")]
+    }, inventory: { try OpenCodeInventory(path: source.path).read() }, collect: { _ in throw Fault("unused", "Unused") })
+    try await owner.refresh(accountIDs: [])
+    let id = try #require(await owner.snapshot().accounts.first(where: { $0.name == "Selected" })?.id)
+    // Simulate OpenCode changing its token after Tally's inventory scan, including an expired token.
+    try warmupDatabase(source, sql: "UPDATE credential SET value = json_set(value, '$.access', 'updated-by-opencode', '$.expires', 1000) WHERE id = 'selected'")
+    let before = try Data(contentsOf: source)
+    #expect(try await owner.warmupModels(accountID: id).map(\.id) == ["openai/cheap"])
+    #expect(try Data(contentsOf: source) == before)
+    #expect(await owner.warmupStatuses()[id] == nil)
+    await owner.shutdown()
 }
 
 @Test func warmupDirectRequestsUseSelectedAccountAndConfirmCompletion() async throws {
     for provider in ["anthropic", "openai", "opencode-go", "xai"] {
+        actor Counter {
+            var calls = 0
+            func record() { calls += 1 }
+        }
+        let counter = Counter()
         let runner = ProviderWarmup(transport: { request in
+            await counter.record()
+            #expect(request.httpMethod == "POST")
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected")
             if provider == "openai" { #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "workspace") }
-            if request.httpMethod != "POST" {
-                if provider == "xai" {
-                    #expect(request.url?.absoluteString == "https://api.x.ai/v1/language-models")
-                    return ResetHTTPResponse(status: 200, body: Data(#"{"models":[{"id":"cheap","input_modalities":["text"],"output_modalities":["text"]}]}"#.utf8))
-                }
-                return ResetHTTPResponse(status: 200, body: Data((provider == "openai" ? #"{"models":[{"slug":"cheap","visibility":"list"}]}"# : #"{"data":[{"id":"cheap"}]}"#).utf8))
-            }
             let data = try #require(request.httpBody)
             let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
             #expect(body["model"] as? String == "cheap")
@@ -276,9 +284,9 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
                 #expect(request.value(forHTTPHeaderField: "session-id") == body["prompt_cache_key"] as? String)
                 response = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
             case "opencode-go":
-                #expect(request.url?.absoluteString == "https://opencode.ai/zen/go/v1/responses")
-                #expect(request.value(forHTTPHeaderField: "x-opencode-session") == body["prompt_cache_key"] as? String)
-                response = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"synthetic\"}}\n\n"
+                #expect(request.url?.absoluteString == "https://opencode.ai/zen/go/v1/chat/completions")
+                #expect(request.value(forHTTPHeaderField: "x-opencode-session") != nil)
+                response = #"{"choices":[{"finish_reason":"stop"}]}"#
             default:
                 #expect(request.url?.path.hasSuffix("chat/completions") == true)
                 response = #"{"choices":[{"finish_reason":"stop"}]}"#
@@ -286,6 +294,7 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
             return ResetHTTPResponse(status: 200, body: Data(response.utf8))
         })
         try await runner.send(WarmupRequest(credential: StoredCredential(storedID: "selected", name: "Selected", key: "selected", provider: provider, workspace: "workspace"), model: provider + "/cheap", prompt: "What is 9 times 7?"))
+        #expect(await counter.calls == 1)
     }
     #expect(throws: Fault.self) { try ProviderWarmup.confirm(Data("data: {\"type\":\"response.created\"}\n".utf8), provider: "openai") }
     #expect(throws: Fault.self) { try ProviderWarmup.confirm(Data("data: {\"type\":\"message_stop\"}\n".utf8), provider: "anthropic") }
@@ -299,7 +308,7 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
     }
     let counter = Counter()
     let runner = ProviderWarmup(transport: { request in
-        if request.httpMethod != "POST" { return ResetHTTPResponse(status: 200, body: Data(#"{"data":[{"id":"selected"}]}"#.utf8)) }
+        #expect(request.httpMethod == "POST")
         await counter.record()
         return ResetHTTPResponse(status: 403, body: Data(#"{"error":{"type":"RegionError","message":"Requires opt-in"}}"#.utf8))
     })
@@ -312,65 +321,47 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
     #expect(await counter.posts == 1)
 }
 
-@Test(arguments: [false, true]) func warmupRefreshesExpiredAccountBeforeQuotaCollectionWithOneRetry(alwaysFails: Bool) async throws {
-    actor Calls {
-        var refreshes = 0
-        var keys: [String] = []
-        func refresh() -> Int { refreshes += 1; return refreshes }
-        func collect(_ key: String) { keys.append(key) }
+@Test(arguments: ["glm-5.3-flash", "gpt-5.6-luna"]) func warmupGoUsesModelProtocolBeforeSending(model: String) async throws {
+    actor Counter {
+        var calls = 0
+        func record() { calls += 1 }
     }
-    let calls = Calls()
-    let now = Date(timeIntervalSince1970: 1_900_000_000)
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let database = root.appendingPathComponent("opencode.db")
-    try warmupDatabase(database, sql: "CREATE TABLE credential (id TEXT, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER, time_updated INTEGER); INSERT INTO credential VALUES ('selected', 'openai', 'Selected', '{\"type\":\"oauth\",\"methodID\":\"chatgpt-browser\",\"access\":\"expired\",\"refresh\":\"old\",\"expires\":1000}', 0, 1, 1);")
-    let auth = WarmupCredentials(transport: { request in
-        #expect(request.url?.absoluteString == "https://auth.openai.com/oauth/token")
-        #expect(request.httpMethod == "POST")
-        let attempt = await calls.refresh()
-        if alwaysFails || attempt == 1 { return ResetHTTPResponse(status: 400, body: Data()) }
-        return ResetHTTPResponse(status: 200, body: Data(#"{"access_token":"fresh","refresh_token":"rotated","expires_in":3600}"#.utf8))
+    let counter = Counter()
+    let runner = ProviderWarmup(transport: { request in
+        await counter.record()
+        #expect(request.value(forHTTPHeaderField: "x-opencode-session") != nil)
+        let data = try #require(request.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["model"] as? String == model)
+        if model == "glm-5.3-flash" {
+            #expect(request.url?.path == "/zen/go/v1/chat/completions")
+            #expect(body["messages"] != nil && body["input"] == nil)
+            return ResetHTTPResponse(status: 200, body: Data(#"{"choices":[{"finish_reason":"stop"}]}"#.utf8))
+        }
+        #expect(request.url?.path == "/zen/go/v1/responses")
+        #expect(body["input"] != nil && body["messages"] == nil)
+        return ResetHTTPResponse(status: 200, body: Data("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n".utf8))
     })
-    let owner = TallyOwner(clock: { now }, warmupCredentials: auth, inventory: { try OpenCodeInventory(path: database.path).read() }, collections: { credential in
-        [.go { await calls.collect(credential.key); return GoObservation(windows: warmupQuotas(at: now).data!.windows) }]
-    }, collect: { _ in throw Fault("unexpected", "Unused collector") })
-    try await owner.setDatabasePath(database.path)
-    let id = try #require(await owner.snapshot().accounts.first?.id)
-    try await owner.setWarmup(accountID: id, enabled: true, model: "openai/cheap")
-    await owner.tick(); await owner.waitForWarmup(); await owner.waitForCollection()
-    #expect(await calls.refreshes == 2)
-    if alwaysFails {
-        #expect(await owner.warmupStatuses()[id]?.suspended == true)
-        await owner.tick(); await owner.waitForWarmup()
-        #expect(await calls.refreshes == 2)
-        #expect(await calls.keys.isEmpty)
-        await owner.shutdown()
-        return
-    }
-    #expect(await calls.keys == ["fresh"])
-    #expect(await owner.snapshot().accounts.first?.id == id)
-    #expect(await owner.warmupStatuses()[id]?.enabled == true)
-    #expect(await owner.warmupStatuses()[id]?.suspended == false)
-    #expect(try OpenCodeInventory(path: database.path).read().credentials.first?.refresh == "rotated")
-    await owner.shutdown()
+    try await runner.send(WarmupRequest(credential: StoredCredential(storedID: "test", name: "Test", key: "synthetic"), model: "opencode-go/" + model, prompt: "What is 9 times 7?"))
+    #expect(await counter.calls == 1)
 }
 
-@Test func warmupRefreshProtocolsPreserveUnrotatedTokens() async throws {
-    let now = Date(timeIntervalSince1970: 1_900_000_000)
-    for provider in ["anthropic", "openai", "xai"] {
-        let auth = WarmupCredentials(transport: { request in
-            #expect(request.httpMethod == "POST")
-            let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
-            #expect(body.contains("refresh_token"))
-            #expect(body.contains(provider == "anthropic" ? "a+b&c" : "a%2Bb%26c"))
-            return ResetHTTPResponse(status: 200, body: Data(#"{"access_token":"fresh","expires_in":3600}"#.utf8))
-        })
-        let next = try await auth.refresh(StoredCredential(storedID: "test", name: "Test", key: "old", provider: provider, refresh: "a+b&c"), now: now)
-        #expect(next.key == "fresh" && next.refresh == "a+b&c")
-        #expect(next.expiresAt == now.addingTimeInterval(3600))
+@Test(arguments: [401, 500]) func warmupFailedMessageNeverRefreshesOrRetries(status: Int) async throws {
+    actor Counter {
+        var calls = 0
+        func record() { calls += 1 }
     }
+    let counter = Counter()
+    let runner = ProviderWarmup(transport: { request in
+        await counter.record()
+        #expect(request.url?.absoluteString == "https://chatgpt.com/backend-api/codex/responses")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer expired")
+        return ResetHTTPResponse(status: status, body: Data())
+    })
+    await #expect(throws: Fault.self) {
+        try await runner.send(WarmupRequest(credential: StoredCredential(storedID: "test", name: "Test", key: "expired", provider: "openai", refresh: "never-use", expiresAt: .distantPast), model: "openai/cheap", prompt: "Test"))
+    }
+    #expect(await counter.calls == 1)
 }
 
 @Test func warmupLiveModelDiscovery() async throws {
@@ -387,7 +378,7 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
 @Test func warmupAuthorizedLiveMessages() async throws {
     guard let path = ProcessInfo.processInfo.environment["TALLY_WARMUP_LIVE_SEND"] else { return }
     let inventory = try OpenCodeInventory(path: path).read()
-    let targets = [("anthropic", "Personal", "claude-haiku-4-5-20251001"), ("openai", "Work", "gpt-5.6-luna"), ("opencode-go", "Extra", "gpt-5.6-luna"), ("xai", "xAI", "grok-4.3")]
+    let targets = [("anthropic", "Personal", "claude-haiku-4-5-20251001"), ("openai", "Work", "gpt-5.6-luna"), ("opencode-go", "Extra", "glm-5.3-flash"), ("xai", "xAI", "grok-4.3")]
     for (provider, name, model) in targets {
         if let only = ProcessInfo.processInfo.environment["TALLY_WARMUP_LIVE_PROVIDER"], provider != only { continue }
         let matches = inventory.credentials.filter { $0.provider == provider && $0.name == name }

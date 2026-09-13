@@ -10,26 +10,6 @@ struct TallySettings: View {
     var body: some View {
         TabView {
             Form {
-                Section {
-                    Text("Start five-hour windows before you sit down to code.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
-                    let matches = accounts.filter { $0.provider == provider }
-                    if !matches.isEmpty {
-                        Section(ProviderArtwork.logos[provider]?.name ?? provider) {
-                            ForEach(matches) { account in
-                                WarmupSettings(account: account, runtime: runtime)
-                            }
-                        }
-                    }
-                }
-                if let error = runtime.storageError { Text(error).foregroundStyle(.red) }
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Warm-up", systemImage: "sun.max") }
-
-            Form {
                 Section("Accounts in the menu bar") {
                     ForEach(accounts) { account in
                         let provider = ProviderArtwork.logos[account.provider]?.name ?? account.provider
@@ -41,6 +21,7 @@ struct TallySettings: View {
                                     Text(provider).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
+                            .toggleStyle(.checkbox)
                             Spacer()
                             Button { Task { await runtime.move(account, by: -1) } } label: { Image(systemName: "chevron.up") }
                                 .disabled(siblings.first?.id == account.id)
@@ -59,6 +40,7 @@ struct TallySettings: View {
             Form {
                 Section {
                     Toggle("Launch at login", isOn: Binding(get: { runtime.loginEnabled }, set: { runtime.setLaunchAtLogin($0) }))
+                        .toggleStyle(.checkbox)
                         .onAppear { runtime.readLoginStatus() }
                         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in runtime.readLoginStatus() }
                     if let message = runtime.loginMessage {
@@ -86,6 +68,26 @@ struct TallySettings: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gearshape") }
+
+            Form {
+                Section {
+                    Text("Start five-hour windows before you sit down to code.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
+                    let matches = accounts.filter { $0.provider == provider }
+                    if !matches.isEmpty {
+                        Section(ProviderArtwork.logos[provider]?.name ?? provider) {
+                            ForEach(matches) { account in
+                                WarmupSettings(account: account, runtime: runtime)
+                            }
+                        }
+                    }
+                }
+                if let error = runtime.storageError { Text(error).foregroundStyle(.red) }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Warm-up", systemImage: "sun.max") }
         }
         .padding(12)
     }
@@ -149,7 +151,12 @@ private struct WarmupSettings: View {
                     Text("Choose a model to start warming.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     if status.needsAttention {
-                        Text(status.message).font(.caption).foregroundStyle(status.needsAttention ? .red : .secondary)
+                        HStack(alignment: .top) {
+                            Text(status.message).font(.caption).foregroundStyle(.red)
+                            Spacer()
+                            Button("Resume") { Task { await save() } }
+                                .disabled(saving || loading || !models.contains(where: { $0.id == selected }))
+                        }
                     }
                     schedule
                 }
@@ -160,10 +167,15 @@ private struct WarmupSettings: View {
             enabled = status.enabled
             await loadModels()
         }
+        .onChange(of: status.model) { _, model in selected = model }
+        .onChange(of: status.enabled) { _, value in enabled = value }
     }
 
     @ViewBuilder private var schedule: some View {
-        if let next = status.nextAt, next > Date(), !status.needsAttention {
+        if status.needsAttention, let attempted = status.lastAttemptAt {
+            Text("Last attempt: \(attempted.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if let next = status.nextAt, next > Date(), !status.needsAttention {
             Text("Next warm-up: \(next.formatted(date: .abbreviated, time: .shortened))")
                 .font(.caption).foregroundStyle(.secondary)
         } else if let next = account.groups.quotas.nextAttemptAt, next > Date(), !status.needsAttention {
