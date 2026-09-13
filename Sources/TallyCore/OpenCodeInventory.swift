@@ -10,6 +10,7 @@ struct StoredCredential: Sendable {
     var refresh: String? = nil
     var workspace: String? = nil
     var expiresAt: Date? = nil
+    var active = false
 
     var fingerprint: String { identityDigest(key) }
     var preferenceKey: String { identityDigest("\(provider)\u{0}\(storedID)") }
@@ -63,7 +64,7 @@ public struct OpenCodeInventory: Sendable {
         sqlite3_busy_timeout(database, 1000)
         var statement: OpaquePointer?
         // Selecting required columns validates their presence while accepting additive schema changes.
-        let sql = "SELECT id, label, value, integration_id, time_created FROM credential WHERE integration_id IN ('anthropic', 'openai', 'opencode-go', 'xai') ORDER BY time_created, id"
+        let sql = "SELECT id, label, value, integration_id, time_created, id = (SELECT chosen.id FROM credential AS chosen WHERE chosen.integration_id = credential.integration_id ORDER BY chosen.active DESC, chosen.time_created DESC, chosen.id DESC LIMIT 1) FROM credential WHERE integration_id IN ('anthropic', 'openai', 'opencode-go', 'xai') ORDER BY time_created, id"
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw Fault("inventory_schema_incompatible", "OpenCode's credential schema is not compatible with this Tally build.")
         }
@@ -125,8 +126,11 @@ public struct OpenCodeInventory: Sendable {
                 throw Fault("credentials_unavailable", "A stored credential is invalid. Manage this Account in OpenCode.")
             }
             let credential = StoredCredential(storedID: try text(0), name: try text(1), key: secret, provider: provider,
-                                              refresh: refresh, workspace: workspace.flatMap { $0.isEmpty ? nil : $0 }, expiresAt: expiresAt)
-            if !credentials.contains(where: { $0.evidence.relation(to: credential.evidence) == .same }) { credentials.append(credential) }
+                                              refresh: refresh, workspace: workspace.flatMap { $0.isEmpty ? nil : $0 }, expiresAt: expiresAt,
+                                              active: sqlite3_column_int(statement, 5) == 1)
+            if let duplicate = credentials.firstIndex(where: { $0.evidence.relation(to: credential.evidence) == .same }) {
+                credentials[duplicate].active = credentials[duplicate].active || credential.active
+            } else { credentials.append(credential) }
         }
         guard try databaseIdentity() == identity else { throw Fault("inventory_unavailable", "OpenCode database changed during the read.") }
         return InventoryRead(databaseIdentity: identity, credentials: credentials)

@@ -49,11 +49,14 @@ Companion 0.1.0 supports **API major 1**. App and companion release numbers need
 
 ## Model actions
 
+Accounts report `active: true` for the stored account selected in OpenCode, `false` for inactive accounts, and null or an absent field when selection is unknown. `activate` requires an explicit user request naming the account. It changes the selected account for that provider in the local OpenCode service on the Mac running Tally, including when the companion runs remotely. Resolve names with `accounts`; ask about ambiguous names. Never switch automatically because an account is low on quota. An unconfirmed response requires reading Accounts before another explicit switch; the companion does not retry it.
+
 | Input | REST request |
 | --- | --- |
 | `{"action":"status"}` | `GET /api/v1/status` |
 | `{"action":"accounts"}` | `GET /api/v1/accounts` |
 | `{"action":"accounts","accountId":"opaque-ID"}` | `GET /api/v1/accounts/{accountId}` |
+| `{"action":"activate","accountId":"opaque-ID"}` | Compatibility check, then `POST /api/v1/accounts/{accountId}/activate` with `{}` |
 | `{"action":"activity","range":"today"}` | `GET /api/v1/activity?range=today` |
 | `{"action":"refresh"}` | Compatibility check, then `POST /api/v1/refresh` with `{}` |
 | `{"action":"refresh","accountIds":[]}` | Compatibility check, then refresh activity only |

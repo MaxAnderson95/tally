@@ -10,7 +10,7 @@ import { AccountPreferences, ColorPicker, type PreferenceChange } from './Accoun
 import { PullToReload } from './PullToReload'
 import { useWarmups } from './WarmupPreferences'
 
-function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving, warmupWarning }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean; warmupWarning?: string }) {
+function AccountCard({ account, timezone, disconnected, inventoryError, now, save, saving, warmupWarning, activate, switching }: { account: Account; timezone: string; disconnected: boolean; inventoryError: Fault | null; now: number; save: (change: PreferenceChange) => Promise<boolean>; saving: boolean; warmupWarning?: string; activate: (id: string) => Promise<void>; switching?: string }) {
   const quota = account.groups.quotas
   const windows = overviewWindows(account)
   const extra = account.groups.extraUsage
@@ -31,6 +31,12 @@ function AccountCard({ account, timezone, disconnected, inventoryError, now, sav
       {resets.warning}
       <button className="details-toggle" aria-label={`Details for ${account.name}`} aria-expanded={details} onClick={() => setDetails(!details)}><span className="card-chevron" aria-hidden="true">⌃</span></button>
     </header>
+    <div className="account-selection">
+      {account.active === true && !disconnected && !inventoryError ? <span>✓ Active in OpenCode</span> : <>
+        <button disabled={!!switching || disconnected || !!inventoryError || account.active == null} onClick={() => void activate(account.id)}>{switching === account.id ? 'Switching…' : 'Use in OpenCode'}</button>
+        {(account.active == null || disconnected || !!inventoryError) && <span>Selection unavailable</span>}
+      </>}
+    </div>
     {resets.result}
     {warmupWarning && <p className="account-error" role="status">Auto warm-up: {warmupWarning} Open Settings to review.</p>}
     {windows.length === 0 && <div className="unavailable"><strong>?</strong><div className="bar uncertain" /><p>{quota.observedAt ? 'No quota windows reported' : 'Quota unavailable'}</p></div>}
@@ -103,6 +109,8 @@ function App() {
   const [view, setView] = useState<'accounts' | 'activity'>('accounts')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [switching, setSwitching] = useState<string>()
+  const switchInFlight = useRef(false)
   const [preferenceError, setPreferenceError] = useState<string>()
   const [schedule, setSchedule] = useState<RefreshResponse>()
   const [activityObserved, setActivityObserved] = useState<string | null>(null)
@@ -152,6 +160,23 @@ function App() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
+  async function activate(accountId: string) {
+    if (switchInFlight.current) return
+    switchInFlight.current = true
+    setSwitching(accountId)
+    setPreferenceError(undefined)
+    try {
+      const response = await fetch(`/api/v1/accounts/${encodeURIComponent(accountId)}/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(25_000) })
+      if (!response.ok) { const result: { error: Fault } = await response.json(); throw new Error(result.error.message) }
+      setData(decodeAccounts(await response.text()))
+    } catch (failure) {
+      setPreferenceError(failure instanceof Error ? failure.message + ' Read the current selection before retrying.' : 'Account switch was not confirmed. Check the current selection before retrying.')
+    } finally {
+      switchInFlight.current = false
+      setSwitching(undefined)
+      window.dispatchEvent(new Event('tally:operation'))
+    }
+  }
   async function savePreference(change: PreferenceChange): Promise<boolean> {
     setSaving(true)
     setPreferenceError(undefined)
@@ -182,7 +207,7 @@ function App() {
     <div className="account-region" hidden={view !== 'accounts'}>
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
       {pinned && <div className="section-heading"><h2>Pinned</h2><span>{data.accounts.filter(account => account.pinned).length} accounts</span></div>}
-      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} warmupWarning={warmups.readings?.[account.id]?.needsAttention ? warmups.readings[account.id].message : undefined} />)}</div>
+      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} activate={activate} switching={switching} warmupWarning={warmups.readings?.[account.id]?.needsAttention ? warmups.readings[account.id].message : undefined} />)}</div>
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}

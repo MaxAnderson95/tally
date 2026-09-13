@@ -41,6 +41,7 @@ const Credit = object({
 export const Account = object({
   id: text, provider: Provider, service: z.enum(['claude-subscription', 'chatgpt-subscription', 'opencode-go', 'grok-subscription']),
   name: text, pinned: flag, pinOrder: nullableNumber, identityColorIndex: number,
+  active: flag.nullable().optional(),
   pin: object({ lines: z.array(object({ windowId: text, label: text, remainingPercent: nullableNumber, stale: flag })), warning: flag }),
   groups: object({
     plan: group(object({ name: text })), quotas: group(object({ windows: z.array(QuotaWindow) })),
@@ -90,13 +91,14 @@ export const Redemption = object({
 const operationId = z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, 'Use the original operation UUID')
 // Anthropic requires an object root; action-specific field pairing is checked during execution.
 export const Input = z.strictObject({
-  action: z.enum(['status', 'accounts', 'activity', 'refresh', 'redeem', 'redemption', 'acknowledge']),
+  action: z.enum(['status', 'accounts', 'activity', 'refresh', 'activate', 'redeem', 'redemption', 'acknowledge']).describe('activate switches the named accountId in the OpenCode service on the Mac running Tally. Use only when the user requests that account switch. Resolve names with accounts, which reports active: true/false (null or absent means unknown). Never switch automatically based on quota levels or retry a lost switch response; read accounts to check the selection.'),
   accountId: id.optional(), range: Range.optional(), accountIds: z.array(id).optional(),
   operationId: operationId.optional(), creditId: id.optional(),
 })
 export const Command = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('status') }),
   z.strictObject({ action: z.literal('accounts'), accountId: id.optional() }),
+  z.strictObject({ action: z.literal('activate'), accountId: id }),
   z.strictObject({ action: z.literal('activity'), range: Range.optional() }),
   z.strictObject({ action: z.literal('refresh'), accountIds: z.array(id).optional() }),
   z.strictObject({ action: z.literal('redeem'), accountId: id, operationId, creditId: id.optional() }),
@@ -107,11 +109,12 @@ export type TallyInput = z.infer<typeof Input>
 export const Result = z.union([
   object({ ok: z.literal(true), action: z.literal('status'), data: Status }),
   object({ ok: z.literal(true), action: z.literal('accounts'), data: z.union([AccountsResponse, AccountResponse]) }),
+  object({ ok: z.literal(true), action: z.literal('activate'), data: AccountsResponse }),
   object({ ok: z.literal(true), action: z.literal('activity'), data: ActivityResponse }),
   object({ ok: z.literal(true), action: z.literal('refresh'), data: RefreshResponse }),
   object({ ok: z.literal(true), action: z.literal('redeem'), data: Redemption }),
   object({ ok: z.literal(true), action: z.literal('redemption'), data: Redemption }),
   object({ ok: z.literal(true), action: z.literal('acknowledge'), data: Redemption }),
-  object({ ok: z.literal(false), action: z.enum(['status', 'accounts', 'activity', 'refresh', 'redeem', 'redemption', 'acknowledge']), error: Fault }),
+  object({ ok: z.literal(false), action: z.enum(['status', 'accounts', 'activity', 'refresh', 'activate', 'redeem', 'redemption', 'acknowledge']), error: Fault }),
 ])
 export type TallyResult = z.infer<typeof Result>

@@ -53,6 +53,19 @@ export function createTally(options: unknown = {}) {
       const validated = Command.safeParse(raw)
       if (!validated.success) throw fault('invalid_request', 'Use an action with its documented fields. Account and credit IDs must be nonempty; reset actions require the original operation UUID. Unrelated fields are not accepted.')
       const input = validated.data
+      if (input.action === 'activate') {
+        status(await request('/status'))
+        try {
+          const data = await request(`/accounts/${encodeURIComponent(input.accountId)}/activate`, {})
+          const result = decode(AccountsResponse, data)
+          status(result.status)
+          return { ok: true, action: input.action, data: result }
+        } catch (error) {
+          const known = Fault.safeParse(error)
+          if (known.success && !['app_unavailable', 'invalid_response', 'http_error'].includes(known.data.code)) throw error
+          throw fault('account_switch_unconfirmed', 'The switch response was lost or incompatible. Read accounts to check active status; do not automatically resend the switch.')
+        }
+      }
       if (input.action === 'redeem' || input.action === 'redemption' || input.action === 'acknowledge') {
         status(await request('/status'))
         const path = `/redemptions/${encodeURIComponent(input.operationId)}`

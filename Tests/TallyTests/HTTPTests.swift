@@ -209,6 +209,34 @@ private struct AuthorityResponder: HTTPResponder {
     }
 }
 
+@Test func accountSelectionRouteSharesStateAndRejectsInvalidCommands() async throws {
+    let scenario = SelectionScenario()
+    let owner = scenario.owner()
+    _ = try await owner.refresh(accountIDs: [])
+    let target = try #require(await owner.snapshot().accounts.first(where: { $0.name == "b" }))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("<html>Fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    try await app.test(.router) { client in
+        let path = "/api/v1/accounts/\(target.id)/activate"
+        let headers: HTTPFields = [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]
+        try await client.execute(uri: path, method: .get, headers: headers) { #expect($0.status == .methodNotAllowed) }
+        try await client.execute(uri: path, method: .post, headers: headers, body: .init(string: "{\"active\":false}")) { #expect($0.status == .badRequest) }
+        try await client.execute(uri: path, method: .post, headers: [testAuthority: "127.0.0.1:7483", .contentType: "application/json", .origin: "https://evil.example"], body: .init(string: "{}")) { #expect($0.status == .forbidden) }
+        #expect(scenario.count() == 0)
+        try await client.execute(uri: path, method: .post, headers: headers, body: .init(string: "{}")) { response in
+            #expect(response.status == .ok)
+            let result = try Wire.decoder().decode(AccountsResponse.self, from: Data(response.body.readableBytesView))
+            #expect(result.accounts.first(where: { $0.id == target.id })?.active == true)
+            #expect(!String(buffer: response.body).contains("synthetic"))
+        }
+        #expect(scenario.count() == 1)
+    }
+    await owner.shutdown()
+}
+
 @Test @MainActor func listenerCollisionAndFreshLifetime() async throws {
     let owner = TallyOwner(clock: { Date() }, inventory: { InventoryRead(databaseIdentity: "test-db", credentials: []) }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

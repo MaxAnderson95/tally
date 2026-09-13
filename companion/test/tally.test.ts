@@ -71,6 +71,25 @@ test('refresh verifies major first and preserves all scheduling states, omitted/
   })
 })
 
+test('activate requires an explicit account, returns active state, and never retries an unconfirmed response', async () => {
+  assert.equal(Command.safeParse({ action: 'activate' }).success, false)
+  assert.equal(Command.safeParse({ action: 'activate', accountId: '' }).success, false)
+  const selected = { ...accounts, accounts: accounts.accounts.map((account, index) => ({ ...account, active: index === 0 })) }
+  await serve(async (baseURL, requests) => {
+    const result = await createTally({ baseURL }).execute({ action: 'activate', accountId: 'opaque /?#' })
+    assert.deepEqual(result.output, { ok: true, action: 'activate', data: selected })
+    assert.deepEqual(requests.map(request => [request.path, request.method, request.body]), [
+      ['/api/v1/status', 'GET', ''], ['/api/v1/accounts/opaque%20%2F%3F%23/activate', 'POST', '{}'],
+    ])
+  }, path => ({ data: path === '/api/v1/status' ? accounts.status : selected }))
+  await serve(async (baseURL, requests) => {
+    const result = await createTally({ baseURL }).execute({ action: 'activate', accountId: 'one' })
+    assert.equal(result.output.ok, false)
+    if (!result.output.ok) assert.equal(result.output.error.code, 'account_switch_unconfirmed')
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1)
+  }, path => ({ data: path === '/api/v1/status' ? accounts.status : {} }))
+})
+
 test('command schema rejects invalid actions, IDs, ranges, nulls and unrelated action fields', () => {
   for (const value of [null, {}, { action: 'redeem' }, { action: 'status', range: 'today' }, { action: 'accounts', accountId: '' }, { action: 'accounts', accountId: null }, { action: 'activity', range: 'week' }, { action: 'refresh', accountIds: null }, { action: 'refresh', accountIds: [3] }, { action: 'refresh', accountIds: [''] }]) {
     assert.equal(Command.safeParse(value).success, false, JSON.stringify(value))
@@ -168,7 +187,7 @@ test('the output schema rejects success DTOs paired with the wrong action', () =
     assert.equal(Result.safeParse({ ok: true, action, data }).success, false)
   }
   const schema = z.toJSONSchema(Result)
-  assert(schema.anyOf && schema.anyOf.length === 8)
+  assert(schema.anyOf && schema.anyOf.length === 9)
   const inputSchema = z.toJSONSchema(createTally().input, { target: 'draft-2020-12', io: 'input' })
   assert.equal(inputSchema.type, 'object')
   for (const keyword of ['anyOf', 'oneOf', 'allOf']) assert.equal(keyword in inputSchema, false)
