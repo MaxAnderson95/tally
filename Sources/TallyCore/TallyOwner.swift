@@ -480,7 +480,7 @@ public actor TallyOwner {
     }
 
     @discardableResult public func refresh(accountIDs: [String]? = nil) throws -> RefreshResponse {
-        try refresh(accountIDs: accountIDs, automatic: false)
+        try refresh(accountIDs: accountIDs, automatic: false, manual: true)
     }
 
     /// The app calls this while awake; the owner decides which work is due.
@@ -528,7 +528,7 @@ public actor TallyOwner {
         return ActivityResponse(status: snapshot().status, activity: value)
     }
 
-    private func refresh(accountIDs: [String]?, automatic: Bool) throws -> RefreshResponse {
+    private func refresh(accountIDs: [String]?, automatic: Bool, manual: Bool = false) throws -> RefreshResponse {
         guard !stopping else { throw Fault("shutting_down", "Tally is shutting down.") }
         if let accountIDs, !Set(accountIDs).isSubset(of: Set(accounts.map(\.id))) {
             throw Fault("account_not_found", "One or more Accounts were not found.")
@@ -556,14 +556,14 @@ public actor TallyOwner {
         if let accountIDs, !Set(accountIDs).isSubset(of: Set(accounts.map(\.id))) { throw Fault("account_not_found", "Account identity changed during inventory refresh.") }
         let requested = accountIDs.map(Set.init)
         let schedules = accounts.filter { requested?.contains($0.id) ?? true }.map { account in
-            AccountSchedule(accountId: account.id, schedule: schedule(id: account.id, at: now, automatic: automatic))
+            AccountSchedule(accountId: account.id, schedule: schedule(id: account.id, at: now, automatic: automatic, manual: manual))
         }
         let activity = scheduleActivity(at: now, automatic: automatic)
         persist()
         return RefreshResponse(accounts: schedules, activity: activity)
     }
 
-    private func schedule(id: String, at now: Date, automatic: Bool) -> Schedule {
+    private func schedule(id: String, at now: Date, automatic: Bool, manual: Bool = false) -> Schedule {
         guard let index = accounts.firstIndex(where: { $0.id == id }), let credential = credentials[id] else {
             return Schedule(state: "blocked", reason: Fault("account_not_found", "Account no longer exists."))
         }
@@ -592,7 +592,7 @@ public actor TallyOwner {
             if job.id == "reset-credits", redemptionTasks.keys.contains(where: { redemptions.records[$0]?.result.accountId == id }) { return Schedule(state: "joined") }
             if tasks[key] != nil { return Schedule(state: "joined") }
             var policy = attempts[id]?[job.id] ?? AttemptPolicy()
-            if let decision = policy.decision(at: now, automatic: automatic) { return decision }
+            if !manual, let decision = policy.decision(at: now, automatic: automatic) { return decision }
             policy.start(at: now)
             attempts[id, default: [:]][job.id] = policy
             for group in job.groups { group.update(&accounts[index].groups, attempt: now, next: nil, refreshing: true) }

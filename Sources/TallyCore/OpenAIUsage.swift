@@ -24,7 +24,7 @@ struct OpenAIUsage: Sendable {
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
-        catch { throw Fault("provider_unavailable", "OpenAI could not be reached.") }
+        catch { throw Fault.connection(error, provider: "OpenAI") }
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "OpenAI returned no HTTP response.") }
         guard http.statusCode == 200 else {
             var fault = Fault(http.statusCode == 401 ? "credentials_rejected" : "provider_unavailable", "OpenAI request failed (HTTP \(http.statusCode)). Check the Account in OpenCode.")

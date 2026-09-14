@@ -67,6 +67,10 @@ struct MenuPins: View {
     }
     private func tooltip(_ account: Account) -> String {
         let lines = account.pin.lines.map { "\($0.label): \($0.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "?")\($0.stale ? " (stale)" : "")" }
-        return "\(account.name) · \(ProviderArtwork.logos[account.provider]?.name ?? account.provider)\n" + (lines.isEmpty ? "Quota unavailable" : lines.joined(separator: "\n"))
+        var text = "\(account.name) · \(ProviderArtwork.logos[account.provider]?.name ?? account.provider)\n" + (lines.isEmpty ? "Quota unavailable" : lines.joined(separator: "\n"))
+        if let warning = QuotaWarning.message(for: account, inventoryError: runtime.snapshot?.status.inventory.error) {
+            text += "\n\n" + warning
+        }
+        return text
     }
 }

@@ -16,6 +16,7 @@ extension Account {
 
     mutating func derivePresentation() {
         pin = Pin()
+        pin.warning = groups.quotas.stale || groups.quotas.error != nil
         guard groups.quotas.observedAt != nil, let quotas = groups.quotas.data else { return }
         let eligible = quotas.windows.filter {
             $0.scope == "account" && $0.cadence != "monthly" && ($0.durationSeconds ?? 0) > 0
@@ -31,6 +32,6 @@ extension Account {
             return PinLine(windowId: selected.id, label: selected.label, remainingPercent: selected.remainingPercent,
                            stale: candidates.contains(where: \.stale))
         }
-        pin.warning = groups.quotas.stale || pin.lines.contains(where: \.stale)
+        pin.warning = pin.warning || pin.lines.contains(where: \.stale)
     }
 }

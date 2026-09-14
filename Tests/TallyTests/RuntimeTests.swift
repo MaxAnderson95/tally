@@ -521,6 +521,41 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
     try capture(Dashboard(runtime: runtime, showSettings: {}), width: 360, height: 650, name: "native-empty", dark: true)
 }
 
+@Test @MainActor func nativeQuotaWarningInteraction() async throws {
+    guard let output = ProcessInfo.processInfo.environment["TALLY_PRESENTATION_OUTPUT"] else { return }
+    _ = NSApplication.shared
+    var account = Account(id: "warning-interaction", name: "Synthetic offline account")
+    let now = Date()
+    account.groups.quotas.succeed(Quotas(windows: []), at: now.addingTimeInterval(-600))
+    account.groups.quotas.fail(Fault.connection(URLError(.notConnectedToInternet), provider: "Anthropic"), at: now)
+    account.groups.quotas.nextAttemptAt = now.addingTimeInterval(480)
+    let host = NSHostingView(rootView: QuotaWarning(account: account).padding(30))
+    let window = NSWindow(contentRect: NSRect(x: 300, y: 300, width: 240, height: 120),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    defer { window.close() }
+    try await Task.sleep(for: .milliseconds(200))
+    let existingWindows = Set(NSApplication.shared.windows.map(\.windowNumber))
+    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        let event = try #require(NSEvent.mouseEvent(with: type, location: NSPoint(x: host.bounds.midX, y: host.bounds.midY),
+                                                  modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        window.sendEvent(event)
+    }
+    try await Task.sleep(for: .milliseconds(300))
+    let explanation = try #require(NSApplication.shared.windows.first { candidate in
+        !existingWindows.contains(candidate.windowNumber) && candidate.isVisible
+    })
+    defer { explanation.close() }
+    let view = try #require(explanation.contentView)
+    let image = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+    view.cacheDisplay(in: view.bounds, to: image)
+    try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
+    try #require(image.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: output).appendingPathComponent("native-quota-warning.png"))
+}
+
 @Test func cardsAndPinsSelectDistinctDurationsWithoutHidingUnknowns() async throws {
     let now = Date()
     func window(_ id: String, duration: Double?, used: Double?, scope: String = "account", cadence: String = "rolling") -> QuotaWindow {
@@ -529,6 +564,10 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
         return result
     }
     var account = Account(id: "fixture", name: "Fixture")
+    account.groups.quotas.fail(Fault("provider_unavailable", "Synthetic network failure."), at: now)
+    account.derivePresentation()
+    #expect(account.pin.warning)
+    #expect(account.pin.lines.isEmpty)
     let windows = [window("week", duration: 604800, used: 12), window("b", duration: 18000, used: 80),
                    window("a", duration: 18000, used: 80), window("fable", duration: 600, used: 99, scope: "model"),
                    window("month", duration: 1000, used: 99, cadence: "monthly"), window("unknown", duration: nil, used: 25)]
@@ -891,6 +930,7 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
                 #expect(fault.code == code)
                 #expect(fault.message.contains("Check the Account in OpenCode") == (token == "rejected"))
                 if token == "cooldown" { #expect(fault.retryAt?.timeIntervalSinceNow ?? 0 > 590) }
+                if token == "network" { #expect(fault.message.contains("This Mac is offline")) }
                 #expect(!fault.message.contains("Bearer"))
             }
         }
@@ -1083,7 +1123,8 @@ private final class Scenario: @unchecked Sendable {
     #expect(groups["quotas"]?["error"] is NSNull)
     _ = await owner.snapshot(); _ = try await owner.account(id: first.accounts[0].id)
     #expect(scenario.count() == 1)
-    #expect(try await owner.refresh().accounts[0].schedule.state == "deferred")
+    await owner.wake(); await owner.waitForCollection()
+    #expect(scenario.count() == 1)
     scenario.advanceAndFail()
     try await owner.refresh()
     await owner.waitForCollection()
@@ -1522,6 +1563,76 @@ private final class SchedulingScenario: @unchecked Sendable {
     }
 }
 
+@Test func manualRefreshBypassesBackoffRetryAfterAndAttemptFloor() async throws {
+    let scenario = SchedulingScenario()
+    let owner = scenario.owner()
+    await owner.wake(); await owner.waitForCollection()
+    let accountID = await owner.snapshot().accounts[0].id
+    let observed = scenario.now()
+    var failure = Fault("provider_unavailable", "Synthetic network failure.")
+    failure.retryAt = observed.addingTimeInterval(3_600)
+    scenario.fail("a", failure)
+    scenario.advance(120)
+    await owner.tick(); await owner.waitForCollection()
+    #expect(await owner.snapshot().accounts[0].pin.warning)
+    let attempts = scenario.count("a")
+    await owner.wake(); await owner.waitForCollection()
+    #expect(scenario.count("a") == attempts)
+    #expect(try await owner.refresh(accountIDs: [accountID]).accounts[0].schedule.state == "started")
+    await owner.waitForCollection()
+    #expect(scenario.count("a") == attempts + 1)
+    #expect(await owner.snapshot().accounts[0].groups.quotas.observedAt == observed)
+    scenario.fail("a", nil)
+    #expect(try await owner.refresh(accountIDs: [accountID]).accounts[0].schedule.state == "started")
+    await owner.waitForCollection()
+    #expect(scenario.count("a") == attempts + 2)
+    let recovered = await owner.snapshot().accounts[0]
+    #expect(!recovered.pin.warning)
+    #expect(recovered.groups.quotas.error == nil)
+    #expect(recovered.groups.quotas.nextAttemptAt == scenario.now().addingTimeInterval(120))
+    await owner.shutdown()
+}
+
+@Test @MainActor func quotaWarningExplainsFailuresAgeResetAndRecovery() throws {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var account = Account(id: "warning", name: "Fixture")
+    account.groups.quotas.fail(Fault.connection(URLError(.notConnectedToInternet), provider: "Anthropic"), at: now)
+    let unavailable = try #require(QuotaWarning.message(for: account, now: now))
+    #expect(unavailable.contains("This Mac is offline"))
+    #expect(unavailable.contains("No successful quota reading yet"))
+    var window = QuotaWindow(id: "session", label: "5-hour", cadence: "rolling", durationSeconds: 18_000,
+                             durationSource: "provider", usedPercent: 20, resetAt: now.addingTimeInterval(3_600))
+    window.derive(at: now, groupStale: false)
+    account.groups.quotas.succeed(Quotas(windows: [window]), at: now)
+    #expect(QuotaWarning.message(for: account, now: now) == nil)
+    account.groups.quotas.age(at: now.addingTimeInterval(300))
+    account.groups.quotas.nextAttemptAt = now.addingTimeInterval(480)
+    let aged = try #require(QuotaWarning.message(for: account, now: now.addingTimeInterval(300)))
+    #expect(aged.contains("Last successful quota reading"))
+    #expect(aged.contains("Showing saved percentages"))
+    #expect(aged.contains("Next automatic attempt"))
+    #expect(aged.contains("Click Refresh to retry now"))
+    account.groups.quotas.refreshing = true
+    let refreshing = try #require(QuotaWarning.message(for: account, now: now))
+    #expect(refreshing.contains("Retrying now"))
+    #expect(!refreshing.contains("Next automatic attempt"))
+    window.derive(at: now.addingTimeInterval(3_600), groupStale: false)
+    account.groups.quotas.succeed(Quotas(windows: [window]), at: now.addingTimeInterval(3_600))
+    #expect(QuotaWarning.message(for: account, now: now)?.contains("5-hour: reset time passed") == true)
+}
+
+@Test func connectionFailuresKeepUsefulReasonsWithoutRequestDetails() {
+    for (code, expected) in [(URLError.timedOut, "timed out"), (.networkConnectionLost, "connection was lost"),
+                             (.cannotFindHost, "DNS"), (.serverCertificateUntrusted, "secure connection failed")] {
+        let error = URLError(code, userInfo: [NSLocalizedDescriptionKey: "private-token", NSURLErrorFailingURLErrorKey: URL(string: "https://example.test/private-token")!])
+        let fault = Fault.connection(error, provider: "Fixture")
+        #expect(fault.code == "provider_unavailable")
+        #expect(fault.message.contains(expected))
+        #expect(!fault.message.contains("private-token"))
+    }
+    #expect(!Fault.connection(NSError(domain: "private-token", code: 1), provider: "Fixture").message.contains("private-token"))
+}
+
 @Test func controlledCadenceWakeMinimumAndRefreshValidation() async throws {
     let scenario = SchedulingScenario()
     let owner = scenario.owner()
@@ -1536,9 +1647,6 @@ private final class SchedulingScenario: @unchecked Sendable {
     await owner.tick(); await owner.waitForCollection()
     #expect(scenario.count("a") == 2 && scenario.count("inventory") == 2)
     let id = initial.accounts[0].id
-    let duplicate = try await owner.refresh(accountIDs: [id, id])
-    #expect(duplicate.accounts.count == 1 && duplicate.accounts[0].schedule.state == "deferred")
-    await owner.waitForCollection()
     let scans = scenario.count("activity")
     await #expect(throws: Fault.self) { try await owner.refresh(accountIDs: [id, "unknown"]) }
     #expect(scenario.count("activity") == scans)
@@ -1546,8 +1654,9 @@ private final class SchedulingScenario: @unchecked Sendable {
     await owner.waitForCollection()
     #expect(scenario.count("activity") == scans + 1 && scenario.count("a") == 2)
     scenario.advance(59)
-    #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "deferred")
+    await owner.wake()
     await owner.waitForCollection()
+    #expect(scenario.count("a") == 2)
     scenario.advance(1)
     #expect(try await owner.refresh(accountIDs: [id]).accounts[0].schedule.state == "started")
     await owner.waitForCollection()
@@ -1555,6 +1664,10 @@ private final class SchedulingScenario: @unchecked Sendable {
     await owner.wake(); await owner.waitForCollection()
     #expect(scenario.count("a") == 4 && scenario.count("b") == 3)
     #expect(await owner.snapshot().accounts[0].groups.quotas.observedAt == scenario.now())
+    let duplicate = try await owner.refresh(accountIDs: [id, id])
+    #expect(duplicate.accounts.count == 1 && duplicate.accounts[0].schedule.state == "started")
+    await owner.waitForCollection()
+    #expect(scenario.count("a") == 5)
 }
 
 @Test func backoffRetryAfterAndRestartRetainIndependentLastGoodReadings() async throws {
@@ -1578,8 +1691,10 @@ private final class SchedulingScenario: @unchecked Sendable {
         #expect(snapshot.accounts[0].groups.quotas.error?.retryAt == scenario.now().addingTimeInterval(delay))
         #expect(!snapshot.accounts[1].groups.quotas.stale)
         let activityCalls = scenario.count("activity")
-        #expect(try await owner.refresh().accounts[0].schedule.state == "deferred")
+        let calls = scenario.count("a")
+        await owner.wake()
         await owner.waitForCollection()
+        #expect(scenario.count("a") == calls)
         #expect(scenario.count("activity") == activityCalls + 1)
         scenario.advance(delay)
     }
@@ -1588,9 +1703,8 @@ private final class SchedulingScenario: @unchecked Sendable {
     scenario.fail("a", longer)
     try await owner.refresh(); await owner.waitForCollection()
     let restarted = scenario.owner(storage: storage)
-    let restored = try await restarted.refresh()
-    #expect(restored.accounts[0].schedule.state == "deferred")
-    #expect(restored.accounts[0].schedule.nextAttemptAt == longer.retryAt)
+    await restarted.wake(); await restarted.waitForCollection()
+    #expect(await restarted.snapshot().accounts[0].groups.quotas.nextAttemptAt == longer.retryAt)
     #expect(await restarted.snapshot().accounts[0].groups.quotas.stale)
     #expect(await restarted.snapshot().accounts[0].groups.quotas.observedAt == observed)
     let calls = scenario.count("a")
@@ -1625,7 +1739,7 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(await owner.snapshot().accounts[0].groups.quotas.refreshing)
     credential.key = "rotated"
     scenario.set([credential])
-    #expect(try await owner.refresh().accounts[0].schedule.state == "deferred")
+    await owner.wake()
     let rotated = await owner.snapshot().accounts[0]
     #expect(rotated.id == first.id)
     #expect(!rotated.groups.plan.stale && !rotated.groups.plan.refreshing)
