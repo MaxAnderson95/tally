@@ -317,11 +317,7 @@ struct AccountCard: View {
                     Text(account.groups.plan.data?.name ?? "Plan unknown").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if account.groups.quotas.stale || account.groups.quotas.data?.windows.contains(where: { $0.stale }) == true {
-                    Image(systemName: "exclamationmark.triangle")
-                        .help(quotaWarning)
-                        .accessibilityLabel(quotaWarning)
-                }
+                QuotaWarning(account: account, inventoryError: runtime.snapshot?.status.inventory.error)
                 if account.command.acknowledgementRequired || runtime.resetOperations[account.id]?.acknowledgementRequired == true {
                     Button { resetExplanation.toggle() } label: { Image(systemName: "exclamationmark.triangle") }
                         .accessibilityLabel("Unknown reset outcome for \(account.name)")
@@ -395,18 +391,6 @@ struct AccountCard: View {
                 AccountDetails(account: account)
             }
         }.padding(12).background(scheme == .dark ? Color(red: 44/255, green: 44/255, blue: 46/255) : .white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.2)))
-    }
-    private var quotaWarning: String {
-        let quotas = account.groups.quotas
-        var reasons: [String] = []
-        if let error = quotas.error ?? runtime.snapshot?.status.inventory.error { reasons.append(error.message) }
-        if quotas.stale {
-            reasons.append(quotas.observedAt.map { "Showing an older reading from \($0.formatted(date: .abbreviated, time: .standard))." } ?? "No successful quota reading yet.")
-        }
-        for window in quotas.data?.windows ?? [] where window.resetState == "passed" {
-            reasons.append("\(window.label): reset time passed; awaiting an updated reading.")
-        }
-        return reasons.joined(separator: "\n")
     }
     private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
     private func extraLabel(_ extra: ExtraUsage?) -> String {

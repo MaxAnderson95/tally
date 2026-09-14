@@ -14,7 +14,7 @@ struct GoUsage: Sendable {
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
-        catch { throw Fault("provider_unavailable", "OpenCode Go could not be reached.") }
+        catch { throw Fault.connection(error, provider: "OpenCode Go") }
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "OpenCode Go returned no HTTP response.") }
         guard http.statusCode == 200 else {
             var fault: Fault

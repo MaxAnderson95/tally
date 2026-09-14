@@ -22,7 +22,7 @@ struct GrokUsage: Sendable {
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
-        catch { throw Fault("provider_unavailable", "Grok could not be reached.") }
+        catch { throw Fault.connection(error, provider: "Grok") }
         guard let http = response as? HTTPURLResponse else { throw Fault("provider_unavailable", "Grok returned no HTTP response.") }
         guard http.statusCode == 200 else {
             // Optional settings access can be rejected while the same token still reads billing.

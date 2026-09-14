@@ -68,8 +68,8 @@ struct AttemptPolicy: Codable, Sendable {
     var failures = 0
     var blockedCredential: String?
 
-    // Explicit refreshes (companion tool, wake, Refresh button) skip the 120-second cadence, so this
-    // floor is the only bound on how fast any caller can drive requests at a provider endpoint.
+    // Wake and post-command collection skip the regular cadence but retain this floor.
+    // User-requested refreshes bypass scheduling deadlines and join any in-flight request.
     static let attemptFloor: TimeInterval = 60
 
     func decision(at now: Date, automatic: Bool) -> Schedule? {
