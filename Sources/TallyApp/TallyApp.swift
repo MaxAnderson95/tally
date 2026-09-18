@@ -25,6 +25,8 @@ final class Runtime: ObservableObject {
     @Published var resetBusy: Set<String> = []
     @Published var warmups: [String: WarmupStatus] = [:]
     private var outcomeShownAt: [String: Date] = [:]
+    // Not @Published: the popover reads nothing from it, and publishing would re-evaluate every view on open and close.
+    var dashboardVisible = false
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -124,9 +126,12 @@ final class Runtime: ObservableObject {
                 guard !resetBusy.contains(account.id) else { continue }
                 if resetOperations[account.id] != operation { resetOperations[account.id] = operation; outcomeShownAt[account.id] = nil }
                 guard operation.state != .pending, !operation.acknowledgementRequired else { continue }
-                // A settled outcome is transient feedback, not a persistent status. The window starts when
-                // the popover can first show it rather than at the owner's updatedAt, which a delayed journal
-                // recovery can leave far in the past. Releasing the entry also stops re-reading a finished operation.
+                // A settled outcome is transient feedback, not a persistent status. The window runs only while
+                // the popover is open, because the display loop keeps ticking when it is closed and a delayed
+                // journal recovery can settle an outcome hours after the reset. Anchoring the window to the
+                // owner's updatedAt, or to an observation nobody could see, expires the confirmation unseen.
+                // Releasing the entry also stops re-reading a finished operation.
+                guard dashboardVisible else { continue }
                 let shownAt = outcomeShownAt[account.id] ?? now
                 outcomeShownAt[account.id] = shownAt
                 if now.timeIntervalSince(shownAt) >= 10 { resetOperations[account.id] = nil; outcomeShownAt[account.id] = nil }
@@ -509,12 +514,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.performClose(nil)
     }
     func popoverDidShow(_ notification: Notification) {
+        runtime.dashboardVisible = true
         runtime.dashboardScrollPosition.scrollTo(edge: .top)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             self?.popover.close()
         }
     }
     func popoverDidClose(_ notification: Notification) {
+        runtime.dashboardVisible = false
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         outsideClickMonitor = nil
     }

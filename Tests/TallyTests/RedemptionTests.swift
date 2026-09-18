@@ -35,6 +35,7 @@ import Testing
     #expect(reopened.resetOperations[id]?.acknowledgementRequired == false)
     #expect(scenario.calls().filter { $0.httpMethod == "POST" }.count == 1)
     let shown = scenario.now.addingTimeInterval(3600)
+    reopened.dashboardVisible = true
     await reopened.refreshDisplay(force: false, now: shown)
     #expect(reopened.resetOperations[id]?.state == .unknown)
     await reopened.refreshDisplay(force: false, now: shown.addingTimeInterval(10))
@@ -42,8 +43,9 @@ import Testing
     await owner.shutdown()
 }
 
-// Delayed recovery commits the confirmed verdict with the completion-time updatedAt, so the
-// display window must start when the runtime first shows the outcome, not at that stamp.
+// Delayed recovery commits the confirmed verdict with the completion-time updatedAt, and the display
+// loop keeps running while the popover is closed, so the window must start when the popover actually
+// shows the outcome rather than at either moment the runtime merely observed it.
 @Test(arguments: [false, true]) @MainActor
 func redemptionNativeConfirmedOutcomeClearsTenSecondsAfterItIsShown(delayedRecovery: Bool) async throws {
     let scenario = ResetScenario()
@@ -60,7 +62,12 @@ func redemptionNativeConfirmedOutcomeClearsTenSecondsAfterItIsShown(delayedRecov
         scenario.fail(on: [])
         await owner.tick()
     }
-    let shown = scenario.now.addingTimeInterval(delayedRecovery ? 31 : 0)
+    let settled = scenario.now.addingTimeInterval(delayedRecovery ? 31 : 0)
+    // The closed popover cannot show the confirmation, so the window has not started an hour later.
+    await runtime.refreshDisplay(force: false, now: settled.addingTimeInterval(3600))
+    #expect(runtime.resetOperations[id]?.state == .confirmed)
+    let shown = settled.addingTimeInterval(7200)
+    runtime.dashboardVisible = true
     await runtime.refreshDisplay(force: false, now: shown)
     #expect(runtime.resetOperations[id]?.state == .confirmed)
     await runtime.refreshDisplay(force: false, now: shown.addingTimeInterval(9))
