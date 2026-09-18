@@ -113,14 +113,19 @@ final class Runtime: ObservableObject {
         snapshot = await owner.snapshot()
     }
 
-    func refreshDisplay(force: Bool) async {
+    func refreshDisplay(force: Bool, now: Date = Date()) async {
         let next = await owner.snapshot()
         if force || snapshot.map({ next.differs(from: $0) }) ?? true { snapshot = next }
         for account in next.accounts {
             guard !resetBusy.contains(account.id), let id = account.command.blockingOperationId ?? resetOperations[account.id]?.operationId else { continue }
             do {
                 let operation = try await owner.redemption(operationID: id)
-                if !resetBusy.contains(account.id), resetOperations[account.id] != operation { resetOperations[account.id] = operation }
+                guard !resetBusy.contains(account.id) else { continue }
+                // A settled outcome is transient feedback, not a persistent status. Releasing it
+                // clears the card's status line and stops re-reading a finished operation every second.
+                if operation.state != .pending, !operation.acknowledgementRequired, now.timeIntervalSince(operation.updatedAt) >= 10 {
+                    resetOperations[account.id] = nil
+                } else if resetOperations[account.id] != operation { resetOperations[account.id] = operation }
             } catch { resetErrors[account.id] = "Operation update unavailable. No reset will be resent." }
         }
         let activity = await owner.activityResponse(range: activityRange)
