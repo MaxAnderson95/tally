@@ -34,22 +34,38 @@ import Testing
     #expect(reopened.resetOperations[id]?.state == .unknown)
     #expect(reopened.resetOperations[id]?.acknowledgementRequired == false)
     #expect(scenario.calls().filter { $0.httpMethod == "POST" }.count == 1)
-    await reopened.refreshDisplay(force: false, now: scenario.now.addingTimeInterval(10))
+    let shown = scenario.now.addingTimeInterval(3600)
+    await reopened.refreshDisplay(force: false, now: shown)
+    #expect(reopened.resetOperations[id]?.state == .unknown)
+    await reopened.refreshDisplay(force: false, now: shown.addingTimeInterval(10))
     #expect(reopened.resetOperations[id] == nil)
     await owner.shutdown()
 }
 
-@Test @MainActor func redemptionNativeConfirmedOutcomeClearsAfterTenSeconds() async throws {
+// Delayed recovery commits the confirmed verdict with the completion-time updatedAt, so the
+// display window must start when the runtime first shows the outcome, not at that stamp.
+@Test(arguments: [false, true]) @MainActor
+func redemptionNativeConfirmedOutcomeClearsTenSecondsAfterItIsShown(delayedRecovery: Bool) async throws {
     let scenario = ResetScenario()
+    if delayedRecovery { scenario.fail(on: [3]) }
     let owner = scenario.owner()
     let id = try await resetAccount(owner)
     let account = try await owner.account(id: id).account
     let runtime = Runtime(owner: owner)
     await runtime.redeem(account, credit: Credit(id: "credit-a", status: "available", available: true, expiry: Credit.Expiry(kind: "unknown")))
     await owner.waitForRedemptions()
-    await runtime.refreshDisplay(force: false, now: scenario.now.addingTimeInterval(9))
+    if delayedRecovery {
+        await runtime.refreshDisplay(force: false, now: scenario.now.addingTimeInterval(30))
+        #expect(runtime.resetOperations[id]?.acknowledgementRequired == true)
+        scenario.fail(on: [])
+        await owner.tick()
+    }
+    let shown = scenario.now.addingTimeInterval(delayedRecovery ? 31 : 0)
+    await runtime.refreshDisplay(force: false, now: shown)
     #expect(runtime.resetOperations[id]?.state == .confirmed)
-    await runtime.refreshDisplay(force: false, now: scenario.now.addingTimeInterval(10))
+    await runtime.refreshDisplay(force: false, now: shown.addingTimeInterval(9))
+    #expect(runtime.resetOperations[id]?.state == .confirmed)
+    await runtime.refreshDisplay(force: false, now: shown.addingTimeInterval(10))
     #expect(runtime.resetOperations[id] == nil)
     await owner.shutdown()
 }
