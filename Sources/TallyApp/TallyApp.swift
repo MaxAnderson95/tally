@@ -24,6 +24,7 @@ final class Runtime: ObservableObject {
     @Published var resetErrors: [String: String] = [:]
     @Published var resetBusy: Set<String> = []
     @Published var warmups: [String: WarmupStatus] = [:]
+    private var outcomeShownAt: [String: Date] = [:]
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -113,14 +114,22 @@ final class Runtime: ObservableObject {
         snapshot = await owner.snapshot()
     }
 
-    func refreshDisplay(force: Bool) async {
+    func refreshDisplay(force: Bool, now: Date = Date()) async {
         let next = await owner.snapshot()
         if force || snapshot.map({ next.differs(from: $0) }) ?? true { snapshot = next }
         for account in next.accounts {
             guard !resetBusy.contains(account.id), let id = account.command.blockingOperationId ?? resetOperations[account.id]?.operationId else { continue }
             do {
                 let operation = try await owner.redemption(operationID: id)
-                if !resetBusy.contains(account.id), resetOperations[account.id] != operation { resetOperations[account.id] = operation }
+                guard !resetBusy.contains(account.id) else { continue }
+                if resetOperations[account.id] != operation { resetOperations[account.id] = operation; outcomeShownAt[account.id] = nil }
+                guard operation.state != .pending, !operation.acknowledgementRequired else { continue }
+                // A settled outcome is transient feedback, not a persistent status. The window starts when
+                // the popover can first show it rather than at the owner's updatedAt, which a delayed journal
+                // recovery can leave far in the past. Releasing the entry also stops re-reading a finished operation.
+                let shownAt = outcomeShownAt[account.id] ?? now
+                outcomeShownAt[account.id] = shownAt
+                if now.timeIntervalSince(shownAt) >= 10 { resetOperations[account.id] = nil; outcomeShownAt[account.id] = nil }
             } catch { resetErrors[account.id] = "Operation update unavailable. No reset will be resent." }
         }
         let activity = await owner.activityResponse(range: activityRange)
