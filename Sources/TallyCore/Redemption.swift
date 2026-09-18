@@ -1,8 +1,8 @@
 import Foundation
 
-public struct Redemption: Codable, Sendable {
+public struct Redemption: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable { case pending, confirmed, nothing_to_reset, no_credit, failed, unknown }
-    public struct ProviderResult: Codable, Sendable {
+    public struct ProviderResult: Codable, Sendable, Equatable {
         public var code: String
         @Null public var windowsReset: Int? = nil
     }
