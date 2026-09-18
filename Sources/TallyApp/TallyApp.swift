@@ -57,11 +57,12 @@ final class Runtime: ObservableObject {
             }
         }
         displayTask = Task {
+            // Countdowns, pacing, and relative times display at minute granularity, so one unconditional
+            // publish per minute refreshes them; every other second publishes only changed state.
+            var iteration = 0
             while !Task.isCancelled {
-                await readResetState()
-                activity = await owner.activityResponse(range: activityRange)
-                storageError = await owner.settingsError()?.message
-                warmups = await owner.warmupStatuses()
+                await refreshDisplay(force: iteration % 60 == 0)
+                iteration += 1
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
@@ -112,15 +113,22 @@ final class Runtime: ObservableObject {
         snapshot = await owner.snapshot()
     }
 
-    func readResetState() async {
-        snapshot = await owner.snapshot()
-        for account in snapshot?.accounts ?? [] {
+    func refreshDisplay(force: Bool) async {
+        let next = await owner.snapshot()
+        if force || snapshot.map({ next.differs(from: $0) }) ?? true { snapshot = next }
+        for account in next.accounts {
             guard !resetBusy.contains(account.id), let id = account.command.blockingOperationId ?? resetOperations[account.id]?.operationId else { continue }
             do {
                 let operation = try await owner.redemption(operationID: id)
-                if !resetBusy.contains(account.id) { resetOperations[account.id] = operation }
+                if !resetBusy.contains(account.id), resetOperations[account.id] != operation { resetOperations[account.id] = operation }
             } catch { resetErrors[account.id] = "Operation update unavailable. No reset will be resent." }
         }
+        let activity = await owner.activityResponse(range: activityRange)
+        if force || self.activity.map({ activity.differs(from: $0) }) ?? true { self.activity = activity }
+        let error = await owner.settingsError()?.message
+        if error != storageError { storageError = error }
+        let statuses = await owner.warmupStatuses()
+        if statuses != warmups { warmups = statuses }
     }
 
     func acknowledgeReset(_ account: Account) async {
@@ -218,6 +226,31 @@ final class Runtime: ObservableObject {
         pollingTask?.cancel(); displayTask?.cancel(); serverTask?.cancel()
         await owner.shutdown()
         await pollingTask?.value; await displayTask?.value; await serverTask?.value
+    }
+}
+
+// Every @Published assignment re-evaluates every observing view, including the hidden popover and
+// the retained Settings window, and the SwiftUI Observation trackings those evaluations create are
+// never released while nothing tracked changes. The display loop therefore publishes only real
+// changes. serverTime and pacing follow the clock and would differ every second; the once-a-minute
+// forced publish refreshes their displays instead.
+private extension AccountsResponse {
+    func differs(from other: Self) -> Bool { clockless != other.clockless }
+    private var clockless: Self {
+        var copy = self
+        copy.status.serverTime = .distantPast
+        for account in copy.accounts.indices {
+            for window in copy.accounts[account].groups.quotas.data?.windows.indices ?? 0..<0 {
+                copy.accounts[account].groups.quotas.data?.windows[window].pacing = nil
+            }
+        }
+        return copy
+    }
+}
+private extension ActivityResponse {
+    func differs(from other: Self) -> Bool {
+        var same = other; same.status.serverTime = status.serverTime
+        return self != same
     }
 }
 
@@ -448,6 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func layoutPins() {
         let size = pins.fittingSize
+        guard size.width != item.length else { return }
         item.length = size.width
         pins.frame = NSRect(x: 0, y: 0, width: size.width, height: NSStatusBar.system.thickness)
     }

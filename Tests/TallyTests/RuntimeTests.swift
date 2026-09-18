@@ -421,6 +421,45 @@ private func warmupDatabase(_ url: URL, sql: String) throws {
     }
 }
 
+private final class DisplayClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var time = Date(timeIntervalSince1970: 1_900_000_000)
+    func now() -> Date { lock.withLock { time } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
+}
+
+@Test @MainActor func displayLoopPublishesOnlyChangesAndTheMinuteRefresh() async throws {
+    let clock = DisplayClock()
+    // Halfway through a window with usage, so pacing is projected and moves with every clock read.
+    let window = QuotaWindow(id: "five-hour", label: "5h", cadence: "rolling", durationSeconds: 18000, durationSource: "provider",
+                             usedPercent: 40, resetAt: clock.now().addingTimeInterval(9000))
+    let owner = TallyOwner(clock: { clock.now() }, inventory: {
+        InventoryRead(databaseIdentity: "display", credentials: [StoredCredential(storedID: "display", name: "Display", key: "synthetic")])
+    }, collect: { _ in GoObservation(windows: [window]) })
+    try await owner.refresh(); await owner.waitForCollection()
+    let runtime = Runtime(owner: owner)
+    var published = 0
+    let subscription = runtime.objectWillChange.sink { _ in published += 1 }
+    defer { subscription.cancel() }
+    await runtime.refreshDisplay(force: false)
+    #expect(published == 2)
+    #expect(runtime.snapshot?.accounts.first?.groups.quotas.data?.windows.first?.pacing != nil)
+    for _ in 0..<5 {
+        clock.advance(1)
+        await runtime.refreshDisplay(force: false)
+    }
+    #expect(published == 2)
+    await runtime.refreshDisplay(force: true)
+    #expect(published == 4)
+    // Aging past the staleness threshold changes the shared status inside both responses.
+    clock.advance(300)
+    await runtime.refreshDisplay(force: false)
+    #expect(published == 6)
+    #expect(runtime.snapshot?.accounts.first?.groups.quotas.stale == true)
+    #expect(runtime.activity?.status.inventory.stale == true)
+    await owner.shutdown()
+}
+
 @Test @MainActor func nativePresentationReference() throws {
     // Opt-in image evidence uses the real native views without starting the runtime or collection.
     guard let output = ProcessInfo.processInfo.environment["TALLY_PRESENTATION_OUTPUT"] else { return }

@@ -5,7 +5,7 @@ public enum ActivityRange: String, Codable, Sendable, CaseIterable {
     public var label: String { switch self { case .today: "Today"; case .yesterday: "Yesterday"; case .last30days: "Last 30 days" } }
 }
 
-public struct Tokens: Codable, Sendable {
+public struct Tokens: Codable, Sendable, Equatable {
     public var input: Double = 0
     public var output: Double = 0
     public var reasoning: Double = 0
@@ -18,7 +18,7 @@ public struct Tokens: Codable, Sendable {
         total = input + output + reasoning + cacheRead + cacheWrite
     }
 }
-public struct PricingCoverage: Codable, Sendable {
+public struct PricingCoverage: Codable, Sendable, Equatable {
     public var fullyPricedRows = 0
     public var boundedRows = 0
     public var partiallyPricedRows = 0
@@ -27,14 +27,14 @@ public struct PricingCoverage: Codable, Sendable {
     public var pricedComponents = Tokens()
     public var unpricedComponents = Tokens()
 }
-public struct PricingExclusion: Codable, Sendable {
+public struct PricingExclusion: Codable, Sendable, Equatable {
     public var provider: String
     public var modelId: String
     public var reason: String
     public var rows: Int
     @Null public var tokens: Tokens?
 }
-public struct Estimate: Codable, Sendable {
+public struct Estimate: Codable, Sendable, Equatable {
     public var status = "empty"
     public var currency = "USD"
     @Null public var lower: String? = "0"
@@ -42,14 +42,14 @@ public struct Estimate: Codable, Sendable {
     public var coverage = PricingCoverage()
     public var exclusions: [PricingExclusion] = []
 }
-public struct RecordedCost: Codable, Sendable {
+public struct RecordedCost: Codable, Sendable, Equatable {
     @Null public var amount: String? = nil
     public var currency = "USD"
     public var rowsWithCost = 0
     public var missingCostRows = 0
     public var ambiguousZeroRows = 0
 }
-public struct ActivityAggregate: Codable, Sendable {
+public struct ActivityAggregate: Codable, Sendable, Equatable {
     public var rows = 0
     public var missingUsageRows = 0
     @Null public var tokens: Tokens? = Tokens()
@@ -64,7 +64,7 @@ public struct ActivityAggregate: Codable, Sendable {
         return amount == "0" ? "Recorded $0; pricing provenance unknown" : "Recorded $\(amount) USD"
     }
 }
-public struct ActivitySource: Codable, Sendable {
+public struct ActivitySource: Codable, Sendable, Equatable {
     public var namespaceId: String
     public var schemaRevision = "opencode-v2-assistant-1"
     public var attribution = "provider_local_database"
@@ -82,33 +82,33 @@ public struct ActivitySource: Codable, Sendable {
     @Null public var lastRetainedAt: Date?
     public var populatedDays: Int
 }
-public struct ActivityPricing: Codable, Sendable {
+public struct ActivityPricing: Codable, Sendable, Equatable {
     public var revision = ActivityPrices.bundled?.revision ?? "bundle-unavailable"
     public var observedOn = ActivityPrices.bundled?.observedOn ?? "unknown"
     public var digest = ActivityPrices.digest
     public var basis = "standard_global_api_equivalent"
 }
-public struct ActivityModel: Codable, Sendable { public var modelId: String; public var totals: ActivityAggregate }
-public struct ActivityProvider: Codable, Sendable {
+public struct ActivityModel: Codable, Sendable, Equatable { public var modelId: String; public var totals: ActivityAggregate }
+public struct ActivityProvider: Codable, Sendable, Equatable {
     public var provider: String
     public var label: String
     public var totals: ActivityAggregate
     public var models: [ActivityModel]
 }
-public struct ActivityDay: Codable, Sendable {
+public struct ActivityDay: Codable, Sendable, Equatable {
     public var date: String
     public var startAt: Date
     public var endAt: Date
     public var selected: Bool
     public var totals: ActivityAggregate
 }
-public struct ActivityTrend: Codable, Sendable {
+public struct ActivityTrend: Codable, Sendable, Equatable {
     public var range = ActivityRange.last30days
     public var startAt: Date
     public var endAt: Date
     public var days: [ActivityDay]
 }
-public struct ActivityData: Codable, Sendable {
+public struct ActivityData: Codable, Sendable, Equatable {
     public var range: ActivityRange
     public var startAt: Date
     public var endAt: Date
@@ -119,7 +119,7 @@ public struct ActivityData: Codable, Sendable {
     public var providers: [ActivityProvider]
     public var trend: ActivityTrend
 }
-public struct ActivityResponse: Codable, Sendable { public var status: Status; public var activity: Group<ActivityData> }
+public struct ActivityResponse: Codable, Sendable, Equatable { public var status: Status; public var activity: Group<ActivityData> }
 
 struct ActivityRow: Sendable {
     var created: Date

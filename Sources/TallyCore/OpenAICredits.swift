@@ -1,20 +1,20 @@
 import Foundation
 
-public struct Balances: Codable, Sendable { public var items: [Balance] }
-public struct Balance: Codable, Sendable {
+public struct Balances: Codable, Sendable, Equatable { public var items: [Balance] }
+public struct Balance: Codable, Sendable, Equatable {
     public var unit: String
     @Null public var quantity: String? = nil
     @Null public var money: Money? = nil
     @Null public var referenceValue: Money? = nil
     @Null public var unlimited: Bool? = nil
 }
-public struct ResetSummary: Codable, Sendable {
+public struct ResetSummary: Codable, Sendable, Equatable {
     @Null public var availableCount: Int? = nil
     @Null public var applicableAvailableCount: Int? = nil
     public var source: String
 }
-public struct Credit: Codable, Sendable, Identifiable {
-    public struct Expiry: Codable, Sendable {
+public struct Credit: Codable, Sendable, Equatable, Identifiable {
+    public struct Expiry: Codable, Sendable, Equatable {
         public var kind: String
         @Null public var at: Date? = nil
     }
@@ -27,7 +27,7 @@ public struct Credit: Codable, Sendable, Identifiable {
     @Null public var grantedAt: Date? = nil
     public var expiry: Expiry
 }
-public struct ResetDetails: Codable, Sendable {
+public struct ResetDetails: Codable, Sendable, Equatable {
     public var credits: [Credit]
     // Counts belong to this list observation, independently of the embedded usage summary.
     public var summary: ResetSummary

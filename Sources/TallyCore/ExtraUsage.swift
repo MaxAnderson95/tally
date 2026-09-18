@@ -1,7 +1,7 @@
 import Foundation
 
-public struct Money: Codable, Sendable {
-    public struct Source: Codable, Sendable {
+public struct Money: Codable, Sendable, Equatable {
+    public struct Source: Codable, Sendable, Equatable {
         public var amount: String
         public var unit: String
         @Null public var exponent: Int? = nil
@@ -12,7 +12,7 @@ public struct Money: Codable, Sendable {
     public var source: Source
 }
 
-public struct ExtraUsage: Codable, Sendable {
+public struct ExtraUsage: Codable, Sendable, Equatable {
     @Null public var enabled: Bool? = nil
     @Null public var used: Money? = nil
     @Null public var limit: Money? = nil

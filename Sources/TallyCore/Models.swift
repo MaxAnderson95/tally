@@ -13,8 +13,9 @@ import Foundation
         if let wrappedValue { try container.encode(wrappedValue) } else { try container.encodeNil() }
     }
 }
+extension Null: Equatable where Value: Equatable {}
 
-public struct Fault: Codable, Sendable, Error {
+public struct Fault: Codable, Sendable, Equatable, Error {
     public var code: String
     public var message: String
     @Null public var retryAt: Date? = nil
@@ -45,16 +46,17 @@ public struct Group<Data: Codable & Sendable>: Codable, Sendable {
         stale = stale || observedAt.map { now.timeIntervalSince($0) >= 300 } ?? true
     }
 }
+extension Group: Equatable where Data: Equatable {}
 
-public struct Plan: Codable, Sendable { public var name: String }
-public struct Quotas: Codable, Sendable { public var windows: [QuotaWindow] }
-public struct Pacing: Codable, Sendable {
+public struct Plan: Codable, Sendable, Equatable { public var name: String }
+public struct Quotas: Codable, Sendable, Equatable { public var windows: [QuotaWindow] }
+public struct Pacing: Codable, Sendable, Equatable {
     public var projectedUsedPercent: Double
     public var sparePercent: Double
     @Null public var runOutAt: Date? = nil
     @Null public var runOutReason: String? = nil
 }
-public struct QuotaWindow: Codable, Sendable, Identifiable {
+public struct QuotaWindow: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var label: String
     public var scope = "account"
@@ -100,7 +102,7 @@ public struct QuotaWindow: Codable, Sendable, Identifiable {
 }
 
 public struct AbsentData: Codable, Sendable {}
-public struct AccountGroups: Codable, Sendable {
+public struct AccountGroups: Codable, Sendable, Equatable {
     public var plan = Group<Plan>()
     public var quotas = Group<Quotas>()
     public var extraUsage = Group<ExtraUsage>()
@@ -108,19 +110,19 @@ public struct AccountGroups: Codable, Sendable {
     public var resetSummary = Group<ResetSummary>()
     public var resetDetails = Group<ResetDetails>()
 }
-public struct PinLine: Codable, Sendable {
+public struct PinLine: Codable, Sendable, Equatable {
     public var windowId: String
     public var label: String
     @Null public var remainingPercent: Double? = nil
     public var stale: Bool
 }
-public struct Pin: Codable, Sendable { public var lines: [PinLine] = []; public var warning = false }
-public struct CommandSummary: Codable, Sendable {
+public struct Pin: Codable, Sendable, Equatable { public var lines: [PinLine] = []; public var warning = false }
+public struct CommandSummary: Codable, Sendable, Equatable {
     @Null public var blockingOperationId: String? = nil
     @Null public var state: String? = nil
     public var acknowledgementRequired = false
 }
-public struct Account: Codable, Sendable, Identifiable {
+public struct Account: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var provider = "opencode-go"
     public var service = "opencode-go"
@@ -133,12 +135,12 @@ public struct Account: Codable, Sendable, Identifiable {
     public var groups = AccountGroups()
     public var command = CommandSummary()
 }
-public struct Inventory: Codable, Sendable { public var count: Int; public var namespaceId: String }
-public struct RecoveryStorage: Codable, Sendable {
+public struct Inventory: Codable, Sendable, Equatable { public var count: Int; public var namespaceId: String }
+public struct RecoveryStorage: Codable, Sendable, Equatable {
     public var available = false
     @Null public var error: Fault? = Fault("not_implemented", "Command recovery storage is not available in this slice.")
 }
-public struct Status: Codable, Sendable {
+public struct Status: Codable, Sendable, Equatable {
     public var apiMajor = 1
     public var appBuild: String
     public var serverTime: Date
@@ -147,7 +149,7 @@ public struct Status: Codable, Sendable {
     public var inventory: Group<Inventory>
     public var recoveryStorage = RecoveryStorage()
 }
-public struct AccountsResponse: Codable, Sendable { public var status: Status; public var accounts: [Account] }
+public struct AccountsResponse: Codable, Sendable, Equatable { public var status: Status; public var accounts: [Account] }
 public struct AccountResponse: Codable, Sendable { public var status: Status; public var account: Account }
 public struct Schedule: Codable, Sendable {
     public var state: String
