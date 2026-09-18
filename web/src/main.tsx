@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, quotaWarning, type Account, type AccountsResponse, type RefreshResponse, type Fault } from './api'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, displayNow, groupIsStale, moneyLabel, overviewWindows, percentage, quotaWarning, type Account, type AccountsResponse, type RefreshResponse, type Fault } from './api'
 import './style.css'
 import { providerName } from './ProviderLogo'
 import { RecordedActivity } from './RecordedActivity'
@@ -207,7 +207,7 @@ function App() {
     <div className="account-region" hidden={view !== 'accounts'}>
     {[true, false].map(pinned => data?.accounts.some(account => account.pinned === pinned) && <section key={String(pinned)}>
       {pinned && <div className="section-heading"><h2>Pinned</h2><span>{data.accounts.filter(account => account.pinned).length} accounts</span></div>}
-      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={now} save={savePreference} saving={saving} activate={activate} switching={switching} warmupWarning={warmups.readings?.[account.id]?.needsAttention ? warmups.readings[account.id].message : undefined} />)}</div>
+      <div className="accounts">{data.accounts.filter(account => account.pinned === pinned).map(account => <AccountCard key={account.id} account={account} timezone={data.status.timezone} disconnected={!!error} inventoryError={data.status.inventory.error} now={displayNow(data.status, now)} save={savePreference} saving={saving} activate={activate} switching={switching} warmupWarning={warmups.readings?.[account.id]?.needsAttention ? warmups.readings[account.id].message : undefined} />)}</div>
     </section>)}
     {data?.accounts.length === 0 && <p>No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Tally settings on your Mac.</p>}
     {!data && !error && <p>Reading Tally…</p>}

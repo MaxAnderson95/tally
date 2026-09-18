@@ -89,6 +89,11 @@ export function resetLabel(window: QuotaWindow, now = Date.now()): string {
   return `Resets in ${countdown(Date.parse(window.resetAt), now)}`
 }
 
+export const limitLabel = (limit: number, now = Date.now()) => limit <= now ? 'Limit reached' : `Limit in ${countdown(limit, now)}`
+
+// The owner derives pacing and reset states against its own clock at snapshot time, so an exhausted quota's runOutAt equals serverTime. A client clock that lags it (the poll starts after the tick; a phone's clock runs behind the Mac) would show that run-out as a one-minute countdown instead of reached.
+export const displayNow = (status: Status, now = Date.now()) => Math.max(now, Date.parse(status.serverTime))
+
 export function countdown(deadline: number, now = Date.now()): string {
   const minutes = Math.max(0, Math.ceil((deadline - now) / 60_000))
   if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h`

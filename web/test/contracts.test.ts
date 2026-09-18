@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, groupIsStale, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, earlyLimitDate, countdown, quotaWarning, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, displayNow, groupIsStale, limitLabel, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, earlyLimitDate, quotaWarning, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 import type { Redemption } from '../src/api.ts'
 import { creditUsable, RedemptionClient, redemptionLabel } from '../src/redemptions.ts'
 
@@ -298,11 +298,17 @@ test('cached browser readings age without advancing their successful observation
 })
 
 test('web pacing uses owner projections with native warning thresholds and countdowns', () => {
-  const account = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8')).accounts[0]
+  const { status, accounts: [account] } = decodeAccounts(readFileSync(new URL('../../Tests/TallyTests/Fixtures/accounts.json', import.meta.url), 'utf8'))
   const now = Date.parse('2030-09-01T00:00:00Z')
   const window: QuotaWindow = { ...overviewWindows(account)[0], stale: false, usedPercent: 20, resetAt: new Date(now + 5 * 86400_000).toISOString(), pacing: { projectedUsedPercent: 120, sparePercent: -20, runOutAt: new Date(now + 3 * 86400_000 + 2 * 3600_000).toISOString(), runOutReason: null } }
   assert.equal(earlyLimitDate(window, false, now), Date.parse(window.pacing!.runOutAt!))
-  assert.equal(countdown(earlyLimitDate(window, false, now)!, now), '3d 2h')
+  assert.equal(limitLabel(earlyLimitDate(window, false, now)!, now), 'Limit in 3d 2h')
+  const serverTime = Date.parse(status.serverTime)
+  const exhausted: QuotaWindow = { ...window, usedPercent: 100, resetAt: new Date(serverTime + 3600_000).toISOString(), pacing: { ...window.pacing!, runOutAt: status.serverTime } }
+  assert.equal(limitLabel(earlyLimitDate(exhausted, false, serverTime - 1)!, serverTime - 1), 'Limit in 0h 1m')
+  assert.equal(displayNow(status, serverTime - 1), serverTime)
+  assert.equal(displayNow(status, serverTime + 1), serverTime + 1)
+  assert.equal(limitLabel(earlyLimitDate(exhausted, false, displayNow(status, serverTime - 1))!, displayNow(status, serverTime - 1)), 'Limit reached')
   assert.equal(earlyLimitDate({ ...window, usedPercent: 4 }, false, now), null)
   assert.notEqual(earlyLimitDate({ ...window, usedPercent: 5 }, false, now), null)
   assert.equal(earlyLimitDate(window, true, now), null)
