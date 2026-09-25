@@ -36,7 +36,6 @@ export type Credit = {
 }
 export const balanceLabel = (balance: Balance) => balance.unlimited === true ? `Unlimited ${balance.unit}` : `${balance.quantity ?? 'Unknown'} ${balance.unit}${balance.referenceValue ? ` (${moneyLabel(balance.referenceValue)})` : ''}`
 export const resetCountLabel = (summary: ResetSummary | null) => summary?.availableCount == null ? 'Reset count unavailable' : `${summary.availableCount} reset credits`
-export const creditExpiryLabel = (credit: Credit, timezone: string) => credit.expiry.kind === 'at' ? new Date(credit.expiry.at).toLocaleString(undefined, { timeZone: timezone }) : credit.expiry.kind === 'none' ? 'Does not expire' : 'Expiry unknown'
 export type ExtraUsage = {
   enabled: boolean | null; used: Money | null; limit: Money | null; remaining: Money | null
   remainingPercent: number | null; periodLabel: string | null
@@ -103,6 +102,15 @@ export function countdown(deadline: number, now = Date.now()): string {
 export function earlyLimitDate(window: QuotaWindow, stale: boolean, now = Date.now()): number | null {
   if (stale || window.stale || window.usedPercent === null || window.usedPercent < 5 || !window.resetAt || Date.parse(window.resetAt) <= now) return null
   return window.pacing?.runOutAt ? Date.parse(window.pacing.runOutAt) : null
+}
+
+export function clockLabel(date: number, timezone: string, now = Date.now()): string {
+  const zone = { timeZone: timezone }
+  const day = (value: number) => new Date(value).toLocaleDateString('en-CA', zone)
+  const time = new Date(date).toLocaleTimeString(undefined, { ...zone, hour: 'numeric', minute: '2-digit' })
+  if (day(date) === day(now)) return time
+  if (date - now < 6 * 86_400_000) return `${new Date(date).toLocaleDateString(undefined, { ...zone, weekday: 'short' })} ${time}`
+  return new Date(date).toLocaleString(undefined, { ...zone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 export function quotaWarning(account: Account, disconnected: boolean, inventoryError: Fault | null, now = Date.now()): string {

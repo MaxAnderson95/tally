@@ -88,6 +88,13 @@ public struct ActivityPricing: Codable, Sendable, Equatable {
     public var digest = ActivityPrices.digest
     public var basis = "standard_global_api_equivalent"
 }
+extension ActivityPricing {
+    init(_ prices: ActivityPrices?) {
+        self.init()
+        revision = prices?.revision ?? "unavailable"; observedOn = prices?.observedOn ?? "unknown"
+        digest = prices?.digest ?? ""; basis = prices?.basis ?? basis
+    }
+}
 public struct ActivityModel: Codable, Sendable, Equatable { public var modelId: String; public var totals: ActivityAggregate }
 public struct ActivityProvider: Codable, Sendable, Equatable {
     public var provider: String
@@ -133,7 +140,8 @@ struct ActivityScan: Sendable {
     var databaseIdentity: String
     var rows: [ActivityRow]
 
-    func derive(namespace: String, cutoff: Date, timezone: TimeZone) -> [String: ActivityData] {
+    func derive(namespace: String, cutoff: Date, timezone: TimeZone, prices: ActivityPrices? = .bundled) -> [String: ActivityData] {
+        let aggregate = { (rows: [ActivityRow]) in TallyCore.aggregate(rows, prices: prices) }
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timezone
         let today = calendar.startOfDay(for: cutoff)
         func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: today)! }
@@ -162,13 +170,13 @@ struct ActivityScan: Sendable {
                 value.selected = range == .last30days || (range == .today ? value.startAt == today : value.startAt == day(-1))
                 return value
             })
-            return (range.rawValue, ActivityData(range: range, startAt: start, endAt: end, timezone: timezone.identifier, source: source,
+            return (range.rawValue, ActivityData(range: range, startAt: start, endAt: end, timezone: timezone.identifier, source: source, pricing: ActivityPricing(prices),
                                                 totals: aggregate(selected), providers: providers, trend: trend))
         })
     }
 }
 
-private func aggregate(_ rows: [ActivityRow]) -> ActivityAggregate {
+private func aggregate(_ rows: [ActivityRow], prices: ActivityPrices?) -> ActivityAggregate {
     var result = ActivityAggregate(); result.rows = rows.count
     result.missingUsageRows = rows.filter { $0.tokens == nil }.count
     result.tokens = rows.isEmpty || result.missingUsageRows < rows.count ? Tokens() : nil
@@ -181,6 +189,6 @@ private func aggregate(_ rows: [ActivityRow]) -> ActivityAggregate {
         } else { result.recordedCost.missingCostRows += 1 }
     }
     result.recordedCost.amount = rows.isEmpty || result.recordedCost.rowsWithCost > 0 ? NSDecimalNumber(decimal: cost).stringValue : nil
-    result.estimate = ActivityPrices.estimate(rows)
+    result.estimate = ActivityPrices.estimate(rows, prices: prices)
     return result
 }

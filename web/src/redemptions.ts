@@ -111,6 +111,15 @@ export class RedemptionClient {
     await this.recover()
   }
 
+  // A settled outcome is transient feedback. Forgetting it releases the saved identity so reloads stop re-reading a finished operation.
+  dismiss() {
+    if (!this.operation || this.operation.state === 'pending' || this.operation.acknowledgementRequired || this.busy) return
+    this.revision++
+    try { this.storage.removeItem(this.key) } catch { return }
+    this.operationId = null
+    this.operation = undefined
+  }
+
   async acknowledge() {
     if (!this.operation?.acknowledgementRequired || this.busy) return
     this.revision++

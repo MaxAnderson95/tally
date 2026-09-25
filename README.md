@@ -36,13 +36,13 @@ Click the menu bar glyph to open the popover. Tally refreshes on launch, on wake
 
 **Switch accounts from Tally.** Native and web account cards show **Active in OpenCode** and a **Use in OpenCode** button for inactive accounts. The companion supports `{"action":"activate","accountId":"opaque-ID"}` after resolving the account with `accounts`. Switching requires the local OpenCode service and uses its activation API so OpenCode reloads provider state. It changes the selected account for that provider on the Mac running Tally. Pinning and collection remain independent of selection. Selection follows Tally's inventory refresh; an unavailable inventory shows selection as unknown.
 
-**Quota bars turn red when you are burning too fast.** A blue bar means your current pace fits inside the window. Red means your average usage projects that you will hit the limit before the window resets, and Tally shows how long you have. The small tick mark is the even-pace marker: where you would be if you spread the window evenly.
+**Quota meters turn ember when you are burning too fast.** Each window is drawn as a row of tally strokes, one inked stroke per slice of allowance left. Ink means your current pace fits inside the window. Ember means your average usage projects that you will hit the limit before the window resets, and Tally shows how long you have. The tall mark is the even-pace marker: where you would be if you spread the window evenly. The sentence at the top of the dashboard counts the windows on track to run out and says when the next empty one comes back.
 
 **Pin what you care about.** Pinned accounts appear at the top and their percentages show directly in the menu bar. Everything else groups by provider below. Reorder accounts in Settings, and click an account's icon to change its color.
 
-**The Activity tab counts what you actually spent.** Today, yesterday, or the last 30 days of recorded OpenCode tokens and cost, broken down by provider and model, with a 30-day trend. Tally also estimates what the same activity would have cost at API rates, which is separate from what your subscription charged you.
+**The Activity tab counts what you actually spent.** Today, yesterday, or the last 30 days of recorded OpenCode tokens and cost, broken down by provider and model, with a 30-day trend. Tally also estimates what the same tokens would have cost at pay-as-you-go API prices, using the [models.dev](https://models.dev) catalog, which it rereads at startup and every six hours. That estimate is separate from real spend: the Activity tab lists extra usage your providers actually billed this billing period.
 
-Anthropic extra usage, OpenAI purchased credits, and banked reset credits show on the account cards. Redeeming a reset always needs an explicit confirmation from you.
+Anthropic extra usage, OpenAI purchased credits, and the banked reset count show on each account row. **More** opens exact reset times, pace projections, and the reset credit list. Redeeming a reset always needs an explicit confirmation from you.
 
 ## Auto warm-up
 

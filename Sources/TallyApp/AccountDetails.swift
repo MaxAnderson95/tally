@@ -1,88 +1,33 @@
 import SwiftUI
 import TallyCore
 
-struct DetailRows: View {
-    let rows: [(String, String)]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(alignment: .top, spacing: 12) {
-                    Text(row.0).foregroundStyle(.secondary).frame(width: 108, alignment: .leading)
-                    Text(row.1).frame(maxWidth: .infinity, alignment: .trailing).multilineTextAlignment(.trailing)
-                }.fixedSize(horizontal: false, vertical: true)
-            }
-        }.font(.caption).textSelection(.enabled)
-    }
-}
-
-func groupDetailRows<Value>(_ label: String, _ group: TallyCore.Group<Value>) -> [(String, String)] {
-    var rows = [("\(label) observed", group.observedAt.map { "\($0.formatted()) (\($0.formatted(.relative(presentation: .named))))" } ?? "Never"),
-                ("\(label) attempt", group.lastAttemptAt?.formatted() ?? "Never"),
-                ("\(label) collection", group.refreshing ? "Refreshing" : group.stale ? "Stale" : group.data == nil ? "Not applicable / absent" : "Current"),
-                ("\(label) next", group.nextAttemptAt?.formatted() ?? "Not scheduled")]
-    if let error = group.error { rows.append(("\(label) error", error.message)) }
-    return rows
-}
-
 struct AccountDetails: View {
     let account: Account
+    var now = Date()
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Divider()
-            let groups = account.groups
-            let errors = [groups.plan.error, groups.quotas.error, groups.extraUsage.error, groups.balances.error, groups.resetSummary.error, groups.resetDetails.error].compactMap { $0?.message }
-            ForEach(Array(Set(errors)).sorted(), id: \.self) { error in
-                Label(error, systemImage: "exclamationmark.triangle").font(.caption)
+        let groups = account.groups
+        let errors = Set([groups.plan.error, groups.quotas.error, groups.extraUsage.error, groups.balances.error, groups.resetSummary.error, groups.resetDetails.error].compactMap { $0?.message })
+        let windows = account.overviewWindows.filter { $0.resetAt != nil }
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(errors.sorted(), id: \.self) { error in
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.ember)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(account.overviewWindows.filter { $0.resetAt != nil || $0.pacing != nil }) { window in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(window.label).font(.caption.weight(.semibold))
-                    if let reset = window.resetAt {
-                        DetailRows(rows: [("Resets", reset.formatted(date: .abbreviated, time: .shortened))])
-                    }
-                    if let pacing = window.pacing {
-                        if let runOut = pacing.runOutAt {
-                            DetailRows(rows: [("At current pace", "Runs out \(runOut.formatted(date: .abbreviated, time: .shortened))")])
-                        } else {
-                            DetailRows(rows: [("At current pace", "Lasts through reset")])
+            ForEach(windows) { window in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(window.label).foregroundStyle(Palette.dust).frame(width: 56, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Resets \(clockLabel(window.resetAt!, now: now))")
+                        if !window.stale, window.resetAt! > now, let pacing = window.pacing {
+                            Text(pacing.runOutAt.map { "At this pace, runs out \(clockLabel($0, now: now))" } ?? "At this pace, lasts until reset")
+                                .foregroundStyle(Palette.dust)
                         }
                     }
                 }
             }
             if account.overviewWindows.contains(where: { $0.pacing != nil }) {
-                Text("Pacing estimates assume your average usage rate continues.").font(.caption).foregroundStyle(.secondary)
+                Text("Pace estimates assume your average usage rate continues.").foregroundStyle(Palette.dust)
             }
-            DisclosureGroup("Technical details") {
-                DetailRows(rows: technicalRows).padding(.top, 8)
-            }.font(.caption).foregroundStyle(.secondary)
-        }
-    }
-    private var technicalRows: [(String, String)] {
-        let groups = account.groups
-        var rows = [("Mac timezone", TimeZone.current.identifier)]
-        rows += groupDetailRows("Plan", groups.plan)
-        rows += groupDetailRows("Quotas", groups.quotas)
-        rows += groupDetailRows(account.provider == "xai" ? "PAYG" : "Extra usage", groups.extraUsage)
-        rows += groupDetailRows("Purchased credits", groups.balances)
-        rows += groupDetailRows("Reset count", groups.resetSummary)
-        rows += groupDetailRows("Reset details", groups.resetDetails)
-        if account.provider == "openai" {
-            rows += [("Available resets", groups.resetSummary.data?.availableCount.map(String.init) ?? "Unavailable"),
-                     ("Provider-applicable", groups.resetSummary.data?.applicableAvailableCount.map(String.init) ?? "Not reported")]
-        }
-        if let used = groups.extraUsage.data?.used {
-            rows.append((account.provider == "xai" ? "PAYG source" : "Extra usage source", "\(used.source.amount) \(used.source.unit); exponent \(used.source.exponent.map(String.init) ?? "unknown")"))
-        }
-        for window in account.overviewWindows {
-            rows += [("\(window.label) scope", window.scopeNote ?? window.scope),
-                     ("Observed used", window.usedPercent.map { "\($0.formatted())%" } ?? "?"),
-                     ("Exact reset", window.resetAt?.formatted(date: .abbreviated, time: .standard) ?? (window.resetState == "not_started" ? "Not started" : "Unavailable"))]
-            if let pacing = window.pacing {
-                rows += [("Projected at reset", "\(pacing.projectedUsedPercent.formatted(.number.precision(.fractionLength(0))))%"),
-                          ("Spare allowance", "\(pacing.sparePercent.formatted(.number.precision(.fractionLength(0))))%"),
-                         ("Average-rate run-out", pacing.runOutAt?.formatted(date: .abbreviated, time: .standard) ?? pacing.runOutReason ?? "Unavailable")]
-            } else { rows.append(("Pacing", window.pacingUnavailableReason ?? "Unavailable")) }
-        }
-        return rows
+        }.font(.system(size: 11.5)).textSelection(.enabled)
     }
 }

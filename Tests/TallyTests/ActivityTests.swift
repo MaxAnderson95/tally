@@ -154,6 +154,42 @@ private func pricedRow(_ provider: String, _ model: String, input: Double = 1_00
     #expect(ActivityPrices.estimate([later]).upper == "0.00124")
 }
 
+@Test func modelsDevCatalogPricesExactModelsWithScalarRatesAndContextTiers() throws {
+    let book = try ActivityPrices.modelsDev(fixture("models-dev"), fetchedAt: instant("2026-09-24T23:30:00Z"))
+    #expect(book.basis == "models_dev_catalog" && book.observedOn == "2026-09-24" && book.revision == "models.dev-" + book.digest.prefix(12))
+    #expect(Set(book.models.map { "\($0.provider)/\($0.model)" }) == ["anthropic/claude-opus-5-5", "openai/gpt-6-astra", "openai/o-reasoner", "opencode-go/deepseek-v4.1-flash"])
+    // 1,000 input + 500 output/reasoning + 10,000 cache read, with the fixture's one listed rate per component.
+    let opus = ActivityPrices.estimate([pricedRow("anthropic", "claude-opus-5-5", write: 1_000)], prices: book)
+    #expect(opus.status == "scalar" && opus.lower == "0.021" && opus.upper == "0.021")
+    #expect(ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", input: 262_000)], prices: book).lower == "2.655")
+    #expect(ActivityPrices.estimate([pricedRow("openai", "gpt-6-astra", input: 262_001)], prices: book).lower == "5.29752")
+    #expect(ActivityPrices.estimate([pricedRow("openai", "o-reasoner", read: 0)], prices: book).lower == "0.0024")
+    let partial = ActivityPrices.estimate([pricedRow("opencode-go", "deepseek-v4.1-flash", write: 10)], prices: book)
+    #expect(partial.status == "partial" && partial.lower == "0.00048")
+    #expect(ActivityPrices.estimate([pricedRow("anthropic", "claude-preview")], prices: book).status == "unpriced")
+    #expect(ActivityPrices.estimate([pricedRow("anthropic", "claude-opus-5-5")], prices: nil).exclusions.first?.reason == "API prices are not loaded yet")
+    let again = try ActivityPrices.modelsDev(fixture("models-dev"), fetchedAt: instant("2026-09-25T06:00:00Z"))
+    #expect(again.digest == book.digest && again.revision == book.revision)
+    #expect(throws: Fault.self) { try ActivityPrices.modelsDev(Data(#"{"google":{"models":{}}}"#.utf8), fetchedAt: .now) }
+}
+
+@Test func ownerAdoptsModelsDevPricesAndKeepsThemAcrossRestarts() async throws {
+    let scenario = ActivityScenario()
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("cache.json")
+    let catalog = try fixture("models-dev")
+    let first = TallyOwner(clock: { scenario.now() }, storageURL: storage, inventory: { scenario.inventory() }, timezone: { scenario.timezone() },
+                           scanActivity: { _ in try scenario.scan() }, fetchPriceCatalog: { catalog }, collect: { _ in throw Fault("unexpected", "No Accounts") })
+    await first.tick(); await first.waitForCollection()
+    #expect(await first.activityResponse().activity.data?.pricing.basis == "models_dev_catalog")
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("prices.json").path))
+    let offline = TallyOwner(clock: { scenario.now() }, storageURL: storage, inventory: { scenario.inventory() }, timezone: { scenario.timezone() },
+                             scanActivity: { _ in try scenario.scan() }, collect: { _ in throw Fault("unexpected", "No Accounts") })
+    try await offline.refresh(accountIDs: []); await offline.waitForCollection()
+    #expect(await offline.activityResponse().activity.data?.pricing.basis == "models_dev_catalog")
+}
+
 @Test func activityPricingRevisionCacheRetainsOldUntilSuccessfulScan() async throws {
     let scenario = ActivityScenario()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

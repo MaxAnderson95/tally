@@ -540,8 +540,8 @@ private final class DisplayClock: @unchecked Sendable {
         try capture(AccountDetails(account: snapshot.accounts[0]).padding(12), width: 336, height: 1800, name: "native-details-\(suffix)", dark: dark)
         let resetAccount = snapshot.accounts[1]
         let credit = try #require(resetAccount.groups.resetDetails.data?.credits.first)
-        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true).padding(12), width: 336, height: 600, name: "native-reset-list-\(suffix)", dark: dark)
-        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, expanded: true, confirming: credit.id).padding(12), width: 336, height: 700, name: "native-reset-confirm-\(suffix)", dark: dark)
+        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime).padding(12), width: 336, height: 600, name: "native-reset-list-\(suffix)", dark: dark)
+        try capture(OpenAICreditDetails(account: resetAccount, runtime: runtime, confirming: credit.id).padding(12), width: 336, height: 700, name: "native-reset-confirm-\(suffix)", dark: dark)
         var operation = try Wire.decoder().decode([Redemption].self, from: fixture("redemptions"))[1]
         operation.accountId = resetAccount.id; operation.accountName = resetAccount.name
         runtime.resetOperations[resetAccount.id] = operation

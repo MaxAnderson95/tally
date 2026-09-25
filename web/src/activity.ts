@@ -23,7 +23,7 @@ export type ActivityData = {
     namespaceId: string; schemaRevision: string; attribution: 'provider_local_database'; partialHistory: true
     qualifications: string[]; firstRetainedAt: string | null; lastRetainedAt: string | null; populatedDays: number
   }
-  pricing: { revision: string; observedOn: string; digest: string; basis: 'standard_global_api_equivalent' }
+  pricing: { revision: string; observedOn: string; digest: string; basis: 'standard_global_api_equivalent' | 'models_dev_catalog' }
   totals: Aggregate
   providers: { provider: Provider; label: string; totals: Aggregate; models: { modelId: string; totals: Aggregate }[] }[]
   trend: { range: 'last30days'; startAt: string; endAt: string; days: { date: string; startAt: string; endAt: string; selected: boolean; totals: Aggregate }[] }
@@ -34,20 +34,19 @@ export function decodeActivity(text: string): ActivityResponse {
   if (result.status.apiMajor !== 1) throw new Error('Update Tally: this API version is incompatible.')
   return result
 }
-export const tokenLabel = (value: Aggregate) => value.rows === 0 ? 'No recorded activity' : value.tokens === null ? 'Usage missing' : `${value.tokens.total.toLocaleString()} recorded tokens`
-export const costLabel = (value: Aggregate) => value.rows === 0 ? 'Recorded cost: no recorded activity' : value.recordedCost.amount === null ? 'Recorded cost unavailable' : value.recordedCost.amount === '0' ? 'Recorded $0; pricing provenance unknown' : `Recorded $${value.recordedCost.amount} USD`
-export function estimateLabel(value: Estimate): string {
-  if (value.status === 'empty') return 'API-equivalent estimate: No recorded activity'
-  if (value.lower === null || value.upper === null) return 'API-equivalent estimate: Unpriced'
-  const amount = value.lower === value.upper ? `$${value.lower}` : `$${value.lower} to $${value.upper}`
-  return `API-equivalent ${value.status === 'partial' ? 'partial subtotal' : 'estimate'}: ${amount} USD`
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
+export const compactTokens = (count: number) => compact.format(count)
+export const usd = (value: string) => {
+  const amount = Number(value)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: amount >= 100 ? 0 : 2 }).format(amount)
 }
-export function estimateQualification(value: Estimate): string {
-  switch (value.status) {
-    case 'partial': return 'Incomplete: bounds cover priced components only; the upper value does not bound all activity.'
-    case 'range': return 'Bounded reference: Anthropic writes use 5m/1h alternatives; Go DeepSeek uses off-peak/peak alternatives.'
-    case 'unpriced': return 'No verified amount for these records; recorded cost is separate.'
-    default: return 'Dated standard/global reference-token value, not a bill, subscription charge, quota debit or savings.'
-  }
+export const tokenLabel = (value: Aggregate) => value.rows === 0 ? 'no activity' : value.tokens === null ? 'usage missing' : `${compactTokens(value.tokens.total)} tokens`
+// Partial bounds cover priced components only, so the lower bound is the only honest claim about all activity.
+export function apiValue(value: Aggregate): string | null {
+  const { status, lower, upper } = value.estimate
+  if (status === 'empty') return null
+  if (lower === null || upper === null) return 'Not priced'
+  if (status === 'partial') return `at least ${usd(lower)}`
+  return lower === upper ? usd(lower) : `${usd(lower)} to ${usd(upper)}`
 }
 export const activityRanges = [{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'last30days', label: 'Last 30 days' }] satisfies { value: ActivityRange; label: string }[]
