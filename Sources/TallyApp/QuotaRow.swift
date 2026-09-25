@@ -11,48 +11,40 @@ struct QuotaRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(window.label).font(.subheadline)
-                Spacer()
-                Text(window.remainingPercent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "?")
-                    .font(.subheadline.weight(.semibold))
+        let limit = limitDate
+        let running = limit != nil || window.remainingPercent == 0
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                Text(window.label).font(.system(size: 12, weight: .medium)).lineLimit(1).frame(width: 56, alignment: .leading)
+                TallyMeter(percent: window.remainingPercent, fill: running ? Palette.ember : Palette.ink,
+                           uncertain: window.durationSeconds == nil || window.remainingPercent == nil, pace: limit == nil ? nil : pace)
+                    .animation(.easeOut(duration: 0.7), value: window.remainingPercent)
+                Text(window.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "?")
+                    .font(.readout(13)).foregroundStyle(running ? Palette.ember : Palette.ink)
+                    .lineLimit(1).fixedSize().frame(width: 50, alignment: .trailing)
+                    .contentTransition(.numericText(value: window.remainingPercent ?? 0)).animation(.snappy, value: window.remainingPercent)
             }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Rectangle().fill(.secondary.opacity(0.15))
-                    if let remaining = window.remainingPercent {
-                        Rectangle().fill(limitDate == nil ? Color.blue : Color.red)
-                            .frame(width: geometry.size.width * remaining / 100)
-                    }
-                    if limitDate != nil, let reset = window.resetAt, let duration = window.durationSeconds, duration > 0 {
-                        let expectedRemaining = min(1, max(0, reset.timeIntervalSince(now) / duration))
-                        RoundedRectangle(cornerRadius: 1).fill(.secondary)
-                            .frame(width: 2, height: 10)
-                            .position(x: geometry.size.width * expectedRemaining, y: geometry.size.height / 2)
-                    }
-                }
-            }.frame(height: 4)
-                .overlay {
-                    if window.durationSeconds == nil || window.remainingPercent == nil {
-                        Rectangle().strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                    }
-                }
-                .accessibilityLabel("\(window.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "?") remaining")
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(window.label), \(window.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "unknown") remaining")
             if let reset = window.resetAt {
-                HStack(alignment: .firstTextBaseline) {
-                    let duration = window.durationSeconds == nil ? "Duration unknown. " : ""
-                    Text(duration + (reset <= now ? "Reset time passed; awaiting update" : "Resets in \(countdown(to: reset))"))
-                        .foregroundStyle(.secondary)
-                    if let limit = limitDate {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text((window.durationSeconds == nil ? "Duration unknown. " : "") + (reset <= now ? "Reset time passed; awaiting update" : "Resets in \(countdown(to: reset))"))
+                        .foregroundStyle(Palette.dust).lineLimit(1)
+                    if let limit {
                         Spacer(minLength: 4)
                         Label(limit <= now ? "Limit reached" : "Limit in \(countdown(to: limit))", systemImage: "flame.fill")
-                            .foregroundStyle(.red)
-                            .help("At your average usage rate, this quota is projected to run out before reset. The marker shows the remaining allowance at an even pace.")
+                            .labelStyle(.titleAndIcon).fontWeight(.semibold).lineLimit(1).fixedSize()
+                            .foregroundStyle(Palette.ember)
+                            .help("At your average rate, this window runs out before it resets. The tall mark shows where an even pace would put you.")
                     }
-                }.font(.caption)
+                }.font(.system(size: 11)).padding(.leading, 66)
             }
         }
+    }
+
+    private var pace: Double? {
+        guard let reset = window.resetAt, let duration = window.durationSeconds, duration > 0 else { return nil }
+        return min(100, max(0, reset.timeIntervalSince(now) / duration * 100))
     }
 
     private func countdown(to date: Date) -> String {

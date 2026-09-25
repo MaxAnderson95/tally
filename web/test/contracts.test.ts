@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import { balanceLabel, creditExpiryLabel, resetCountLabel, decodeAccounts, displayNow, groupIsStale, limitLabel, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, earlyLimitDate, quotaWarning, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
+import { balanceLabel, resetCountLabel, decodeAccounts, displayNow, groupIsStale, limitLabel, moneyLabel, overviewWindows, percentage, resetLabel, scheduleLabel, earlyLimitDate, quotaWarning, type QuotaWindow, type Balance, type Credit, type ResetSummary, type ExtraUsage, type RefreshResponse } from '../src/api.ts'
 import type { Redemption } from '../src/api.ts'
 import { creditUsable, RedemptionClient, redemptionLabel } from '../src/redemptions.ts'
 
@@ -231,9 +231,9 @@ test('OpenAI shared normalized credits preserve provenance, zero, null, and expi
   assert.equal(reading.details.summary.applicableAvailableCount, null)
   assert.equal(resetCountLabel({ ...reading.details.summary, availableCount: 0 }), '0 reset credits')
   assert.equal(resetCountLabel(null), 'Reset count unavailable')
-  assert.equal(creditExpiryLabel(reading.details.credits[1], 'America/New_York'), 'Does not expire')
-  assert.equal(creditExpiryLabel(reading.details.credits[2], 'America/New_York'), 'Expiry unknown')
-  assert.match(creditExpiryLabel(reading.details.credits[0], 'America/New_York'), /2030/)
+  assert.equal(reading.details.credits[1].expiry.kind, 'none')
+  assert.equal(reading.details.credits[2].expiry.kind, 'unknown')
+  assert.match(reading.details.credits[0].expiry.at ?? '', /2030/)
   assert.deepEqual(reading.details.credits.map(credit => credit.available), [true, true, null, false])
 })
 
@@ -329,4 +329,26 @@ test('quota warnings explain collection failures, passed resets, and disconnecti
   assert.match(warning, /Provider rate limited/)
   assert.match(warning, /older reading/)
   assert.match(warning, /reset time passed/)
+})
+
+test('dismissing a settled reset forgets its identity but never releases a pending or unacknowledged block', async () => {
+  const operations: Redemption[] = JSON.parse(readFileSync(new URL('../../Tests/TallyTests/Fixtures/redemptions.json', import.meta.url), 'utf8'))
+  const stored = new Map<string, string>()
+  const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value) }, removeItem: (key: string) => { stored.delete(key) } }
+  let operation = operations[0]
+  const client = new RedemptionClient('personal', storage, async () => Response.json(operation))
+  await client.recover(operation.operationId)
+  client.dismiss()
+  assert.equal(stored.get('tally.redemption.personal'), operation.operationId)
+  operation = operations[1]
+  await client.recover()
+  client.dismiss()
+  assert.equal(client.blocked, true)
+  operation = operations[3]
+  const confirmed = new RedemptionClient('work', storage, async () => Response.json(operation))
+  await confirmed.recover(operation.operationId)
+  confirmed.dismiss()
+  assert.equal(confirmed.operation, undefined)
+  assert.equal(stored.has('tally.redemption.work'), false)
+  assert.equal(new RedemptionClient('work', storage).operationId, null)
 })

@@ -37,6 +37,13 @@ public actor TallyOwner {
     var warmupSend: (@Sendable (WarmupRequest) async throws -> Void)?
     private var warmupModelList: (@Sendable (StoredCredential) async throws -> [WarmupModel])?
     var warmupJitter: @Sendable () -> TimeInterval = { Double.random(in: 1...1200) }
+    // API-equivalent pricing follows models.dev: read at startup, then every six hours. The last good catalog survives restarts;
+    // the reviewed bundle prices activity until models.dev has been read once.
+    private var prices: ActivityPrices?
+    private let priceCacheURL: URL?
+    private let fetchPriceCatalog: @Sendable () async throws -> Data
+    private var nextPriceFetchAt = Date.distantPast
+    private var priceTask: Task<Void, Never>?
 
     public init(databasePath: String, appBuild: String, storageURL: URL? = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Tally/accounts.json")) {
         let source = OpenCodeInventory(path: databasePath)
@@ -64,6 +71,15 @@ public actor TallyOwner {
         timezone = { TimeZone.current }
         clock = { Date() }
         self.appBuild = appBuild
+        priceCacheURL = storageURL?.deletingLastPathComponent().appendingPathComponent("prices.json")
+        prices = Self.cachedPrices(at: priceCacheURL) ?? .bundled
+        fetchPriceCatalog = {
+            var request = URLRequest(url: URL(string: "https://models.dev/api.json")!, timeoutInterval: 30)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Fault("pricing_catalog_unavailable", "models.dev did not return its catalog.") }
+            return data
+        }
     }
 
     init(appBuild: String = "test", clock: @escaping @Sendable () -> Date,
@@ -79,6 +95,7 @@ public actor TallyOwner {
          collections: (@Sendable (StoredCredential) -> [CollectionJob])? = nil,
          timezone: @escaping @Sendable () -> TimeZone = { TimeZone.current },
          scanActivity: @escaping @Sendable (Date) async throws -> ActivityScan = { _ in throw Fault("not_implemented", "No test activity source configured.") },
+         fetchPriceCatalog: @escaping @Sendable () async throws -> Data = { throw Fault("not_implemented", "No test price catalog configured.") },
          collect: @escaping @Sendable (String) async throws -> GoObservation) {
         self.appBuild = appBuild; self.clock = clock; inventorySource = inventory
         self.collections = collections ?? { credential in
@@ -94,6 +111,35 @@ public actor TallyOwner {
         self.warmupModelList = warmupModels
         self.activateCredential = activate
         self.quitWait = quitWait
+        self.fetchPriceCatalog = fetchPriceCatalog
+        priceCacheURL = storageURL?.deletingLastPathComponent().appendingPathComponent("prices.json")
+        prices = Self.cachedPrices(at: priceCacheURL) ?? .bundled
+    }
+
+    private static func cachedPrices(at url: URL?) -> ActivityPrices? {
+        url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(ActivityPrices.self, from: $0) }
+    }
+
+    private func refreshPrices() {
+        guard priceTask == nil, clock() >= nextPriceFetchAt else { return }
+        let fetch = fetchPriceCatalog, started = clock()
+        priceTask = Task {
+            let book: ActivityPrices?
+            do {
+                let data = try await fetch()
+                book = try await Task.detached { try ActivityPrices.modelsDev(data, fetchedAt: started) }.value
+            } catch { book = nil }
+            guard !Task.isCancelled else { return }
+            priceTask = nil
+            nextPriceFetchAt = clock().addingTimeInterval(book == nil ? 900 : 6 * 3600)
+            guard let book, book.digest != prices?.digest else { return }
+            prices = book
+            if let priceCacheURL, let data = try? JSONEncoder().encode(book) {
+                try? FileManager.default.createDirectory(at: priceCacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: priceCacheURL, options: .atomic)
+            }
+            _ = scheduleActivity(at: clock(), automatic: false)
+        }
     }
 
     public func snapshot() -> AccountsResponse {
@@ -486,6 +532,7 @@ public actor TallyOwner {
     /// The app calls this while awake; the owner decides which work is due.
     public func tick() {
         guard !stopping else { return }
+        refreshPrices()
         redemptions.retryResults()
         if nextInventoryAt.map({ $0 <= clock() }) ?? true {
             _ = try? refresh(accountIDs: nil, automatic: true)
@@ -510,9 +557,9 @@ public actor TallyOwner {
         value.nextAttemptAt = activity.nextAttemptAt; value.error = activity.error
         value.stale = value.stale || activity.stale
         value.age(at: clock())
-        if let data = value.data, data.pricing.revision != ActivityPricing().revision || data.pricing.digest != ActivityPricing().digest {
+        if let data = value.data, data.pricing.revision != ActivityPricing(prices).revision || data.pricing.digest != ActivityPricing(prices).digest {
             value.stale = true
-            value.error = value.error ?? Fault("activity_pricing_changed", "Reviewed pricing changed; cached estimates retain revision \(data.pricing.revision) until a successful scan.")
+            value.error = value.error ?? Fault("activity_pricing_changed", "API prices changed; cached estimates keep \(data.pricing.revision) until the next successful scan.")
         }
         if let data = value.data, data.timezone != timezone().identifier {
             value.stale = true
@@ -629,14 +676,14 @@ public actor TallyOwner {
         let namespace = databaseIdentity
         let zone = timezone()
         let namespaceID = namespace.flatMap { store.state.namespaces[$0]?.id }
+        let book = prices
         activityTask = Task {
             var fault: Fault?
             var views: [String: ActivityData]?
             do {
-                guard ActivityPrices.bundled != nil else { throw Fault("activity_pricing_unavailable", "Reviewed pricing resource failed verification; reinstall this Tally build. Cached estimates retain their original revision.") }
                 let result = try await scan(now)
                 guard result.databaseIdentity == namespace, let namespaceID else { throw Fault("activity_unavailable", "Activity source identity changed; refresh the inventory.") }
-                views = await Task.detached { result.derive(namespace: namespaceID, cutoff: now, timezone: zone) }.value
+                views = await Task.detached { result.derive(namespace: namespaceID, cutoff: now, timezone: zone, prices: book) }.value
             }
             catch { fault = error as? Fault ?? Fault("activity_unavailable", "Recorded activity could not be scanned.") }
             guard !Task.isCancelled, namespace == databaseIdentity else { return }
@@ -651,6 +698,8 @@ public actor TallyOwner {
             activity.nextAttemptAt = clock().addingTimeInterval(120)
             activityTask = nil
             persist()
+            // Prices that arrived mid-scan apply at once instead of waiting for the next scheduled scan.
+            if fault == nil, book?.digest != prices?.digest { _ = scheduleActivity(at: clock(), automatic: false) }
         }
         return Schedule(state: "started")
     }
@@ -683,12 +732,15 @@ public actor TallyOwner {
     }
 
     public func waitForCollection() async {
+        await priceTask?.value
         for task in Array(tasks.values) { await task.value }
-        await activityTask?.value
+        var awaited: Task<Void, Never>?
+        while let task = activityTask, task != awaited { awaited = task; await task.value }
         persist()
     }
     public func shutdown() async {
         stopping = true
+        priceTask?.cancel()
         warmupTask?.cancel()
         await warmupTask?.value
         for task in tasks.values { task.cancel() }

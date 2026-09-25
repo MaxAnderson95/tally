@@ -1,0 +1,15 @@
+{
+  "anthropic": { "id": "anthropic", "models": {
+    "claude-opus-5-5": { "id": "claude-opus-5-5", "name": "Claude Opus 5.5", "cost": { "input": 4, "output": 20, "cache_read": 0.2, "cache_write": 5 } },
+    "claude-preview": { "id": "claude-preview", "name": "No cost listed" }
+  } },
+  "openai": { "id": "openai", "models": {
+    "gpt-6-astra": { "id": "gpt-6-astra", "cost": { "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5,
+      "tiers": [{ "input": 20, "output": 75, "cache_read": 2, "cache_write": 25, "tier": { "type": "context", "size": 272000 } }] } },
+    "o-reasoner": { "id": "o-reasoner", "cost": { "input": 1, "output": 4, "reasoning": 2 } }
+  } },
+  "opencode-go": { "id": "opencode-go", "models": {
+    "deepseek-v4.1-flash": { "id": "deepseek-v4.1-flash", "cost": { "input": 0.15, "output": 0.6, "cache_read": 0.003 } }
+  } },
+  "google": { "id": "google", "models": { "gemini": { "id": "gemini", "cost": { "input": 1, "output": 1 } } } }
+}

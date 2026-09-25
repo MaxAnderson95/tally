@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, Fault, WarmupModel, WarmupReading } from './api'
 import { ProviderLogo, providerName } from './ProviderLogo'
+import { Collapse } from './motion'
 
 type Readings = Record<string, WarmupReading>
+// Model lists outlive the sheet so reopening Settings shows names immediately instead of raw model IDs.
+const modelCache = new Map<string, WarmupModel[]>()
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...options })
@@ -66,7 +69,7 @@ export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { a
   const { readings, error } = warmups
   return <div className="warmup-preferences">
     <p className="warmup-intro">Start five-hour windows before you sit down to code. Choose a model for each account you enable.</p>
-    {error && <p className="account-error" role="alert">{error}</p>}
+    {error && <p className="note-warn" role="alert">{error}</p>}
     {!readings && !error && <p role="status">Loading warm-up settings…</p>}
     {['anthropic', 'openai', 'opencode-go', 'xai'].map(provider => {
       const matches = accounts.filter(account => account.provider === provider)
@@ -83,10 +86,10 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
   account: Account; status: WarmupReading | undefined; timezone: string; disabled: boolean
   save: (enabled: boolean, model: string) => Promise<void>
 }) {
-  const [models, setModels] = useState<WarmupModel[]>([])
+  const [models, setModels] = useState<WarmupModel[]>(() => modelCache.get(account.id) ?? [])
   const [selected, setSelected] = useState(status?.model ?? '')
   const [enabled, setEnabled] = useState(status?.enabled ?? false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => !modelCache.has(account.id))
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string>()
   const [error, setError] = useState<string>()
@@ -94,11 +97,11 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
   useEffect(() => { if (status) { setSelected(status.model); setEnabled(status.enabled) } }, [status?.model, status?.enabled])
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
+    if (!modelCache.has(account.id)) setLoading(true)
     void request<WarmupModel[]>(`/api/v1/accounts/${encodeURIComponent(account.id)}/warmup/models`, {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
     }).then(result => {
-      if (!controller.signal.aborted) { setModels(result); setError(result.length ? undefined : 'No language models are available for this account.') }
+      if (!controller.signal.aborted) { modelCache.set(account.id, result); setModels(result); setError(result.length ? undefined : 'No language models are available for this account.') }
     }).catch((failure: unknown) => {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Could not load models.')
     }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
@@ -124,31 +127,30 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
   return <div className="warmup-account">
     <label className="warmup-toggle" htmlFor={checkboxID}>
       <span><strong>{account.name}</strong><small>{saving ? 'Saving…' : !status ? 'Loading…' : enabled ? !status.enabled ? 'Choose a model' : status.needsAttention ? 'Needs attention' : unavailable ? 'Waiting' : 'On' : 'Off'}</small></span>
-      <input id={checkboxID} type="checkbox" checked={enabled} disabled={disabled || saving || !status || (!enabled && !!unavailable)}
+      <span className="switch"><input id={checkboxID} type="checkbox" role="switch" checked={enabled} disabled={disabled || saving || !status || (!enabled && !!unavailable)}
         aria-label={`Warm-up for ${providerName(account.provider)} ${account.name}`}
         aria-describedby={unavailable ? `${checkboxID}-reason` : undefined}
         onChange={event => {
           const next = event.target.checked
           setEnabled(next)
           if (!next || models.some(model => model.id === selected)) void change(next, selected)
-        }} />
+        }} /><span aria-hidden="true" /></span>
     </label>
     {unavailable && <p className="warmup-status warmup-unavailable" id={`${checkboxID}-reason`}>{unavailable}{enabled ? '. Your preference is saved.' : ''}</p>}
-    {enabled && <div className="warmup-options">
+    <Collapse open={enabled} className="warmup-options">
       <label className="warmup-model"><span>Model</span>
         <select value={selected} disabled={disabled || saving || loading || !models.length || !!unavailable} aria-label={`Warm-up model for ${providerName(account.provider)} ${account.name}`}
           onChange={event => { setSelected(event.target.value); void change(true, event.target.value) }}>
           <option value="" disabled>{loading ? 'Loading models…' : 'Choose a model'}</option>
-          {selected && !models.some(model => model.id === selected) && <option value={selected} disabled>{selected}{loading ? '' : ' (unavailable)'}</option>}
+          {selected && !models.some(model => model.id === selected) && <option value={selected} disabled>{loading ? 'Loading models…' : `${selected} (unavailable)`}</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
         </select>
       </label>
-      {loading && <p className="warmup-status" role="status">Loading models…</p>}
       {!status?.enabled && !error && <p className="warmup-status">Choose a model to start warming.</p>}
-      {status?.needsAttention && <p className="account-error" role="status">{status.message} <button disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected)}>Resume</button></p>}
+      {status?.needsAttention && <p className="note-warn" role="status">{status.message} <button className="quiet-button" disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected)}>Resume</button></p>}
       {status?.enabled && timestamp && <dl className="warmup-schedule"><dt>{timestamp.label}</dt><dd><time dateTime={timestamp.date}><span>{new Date(timestamp.date).toLocaleDateString(undefined, { timeZone: timezone, dateStyle: 'medium' })}</span><span>{new Date(timestamp.date).toLocaleTimeString(undefined, { timeZone: timezone, timeStyle: 'short' })}</span></time></dd></dl>}
-    </div>}
-    {error && (enabled || saving) && <p className="account-error" role="alert">{error} <button disabled={loading || saving} onClick={() => setAttempt(attempt + 1)}>Retry</button></p>}
-    {saveError && <p className="account-error" role="alert">{saveError}</p>}
+    </Collapse>
+    {error && (enabled || saving) && <p className="note-warn" role="alert">{error} <button className="quiet-button" disabled={loading || saving} onClick={() => setAttempt(attempt + 1)}>Retry</button></p>}
+    {saveError && <p className="note-warn" role="alert">{saveError}</p>}
   </div>
 }

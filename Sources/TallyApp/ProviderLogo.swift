@@ -12,8 +12,8 @@ enum ProviderArtwork {
         Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Tally_TallyApp.bundle")
             ?? Bundle.module.url(forResource: name, withExtension: ext)!
     }
-    static let light = [0x1d1d1f, 0x2456e6, 0xd96d0b, 0x1e8a4c, 0x8b3fc9, 0xcf2f5a]
-    static let dark = [0xf5f5f7, 0x7d9bff, 0xffa24a, 0x4fd08a, 0xc58bf2, 0xff7e9e]
+    static let light = [0x121826, 0x2456e6, 0xd96d0b, 0x1e8a4c, 0x8b3fc9, 0xcf2f5a]
+    static let dark = [0xe7ebf3, 0x7d9bff, 0xffa24a, 0x4fd08a, 0xc58bf2, 0xff7e9e]
     static func color(_ index: Int, dark: Bool) -> Color {
         let hex = (dark ? self.dark : light)[index]
         return Color(.sRGB, red: Double(hex >> 16) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, opacity: 1)
@@ -63,7 +63,7 @@ struct MenuPins: View {
                     }
                 }.padding(.horizontal, 4).help(tooltip(account))
             }
-        }.fixedSize().frame(height: 24).foregroundStyle(.primary)
+        }.fixedSize().frame(height: 24).foregroundStyle(.primary).monospacedDigit()
     }
     private func tooltip(_ account: Account) -> String {
         let lines = account.pin.lines.map { "\($0.label): \($0.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "?")\($0.stale ? " (stale)" : "")" }

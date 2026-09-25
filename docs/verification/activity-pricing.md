@@ -22,7 +22,7 @@ Anthropic writes use the documented 5-minute lower and 1-hour upper rates. Go De
 
 Row coverage partitions into missing usage, unpriced, partially priced, bounded and fully priced. Missing usage has null exclusion token quantities. Known priced/unpriced components partition the retained quantities once, including signed invalid records. A verified all-zero row is scalar zero; an unreviewed all-zero row is unpriced; an empty bucket is empty zero. Exclusions make an aggregate partial if it has any priced rows, otherwise unpriced with null bounds. Partial upper values bound only the same included component subset as the lower value. Recorded cost cannot fill an estimate.
 
-Every successful view has one revision and digest for totals, trend and breakdowns. The app verifies the resource digest before recomputation. Restart restores stale cached views; revision/digest mismatch is visibly stale and preserves the old revision. A successful scan replaces all ranges together. A failed scan or unavailable verified pricing bundle preserves the old view. There is no runtime price feed.
+Every successful view has one revision and digest for totals, trend and breakdowns. The app verifies the resource digest before recomputation. Restart restores stale cached views; revision/digest mismatch is visibly stale and preserves the old revision. A successful scan replaces all ranges together. A failed scan preserves the old view. Since the models.dev change, this bundle is only the fallback before the first successful catalog read; see SPEC section 7.
 
 ## Updating rates
 

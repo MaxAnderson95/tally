@@ -268,61 +268,124 @@ private extension ActivityResponse {
     }
 }
 
+enum DashboardView: Hashable { case accounts, activity }
+
 struct Dashboard: View {
     @ObservedObject var runtime: Runtime
     let showSettings: () -> Void
-    @Environment(\.colorScheme) private var scheme
+    @State private var view = DashboardView.accounts
+    @State private var refreshing = false
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Image(nsImage: NSApplication.shared.applicationIconImage).resizable()
-                                .frame(width: 24, height: 24).accessibilityHidden(true)
-                            Text("Tally").font(.title2.bold())
-                        }
-                        if let updated = ((runtime.snapshot?.accounts.compactMap(\.latestObservation) ?? []) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
-                            Text("Updated \(updated.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        } else { Text("No successful reading yet").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                    }
+        let accounts = runtime.snapshot?.accounts ?? []
+        VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage).resizable()
+                        .frame(width: 22, height: 22).accessibilityHidden(true)
+                    Text("Tally").font(.system(size: 15, weight: .bold))
                     Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 6) {
-                        Button { Task { await runtime.refresh() } } label: { Text("Refresh").frame(width: 64) }
-                        Button(action: showSettings) { Text("Settings").frame(width: 64) }
+                    Group {
+                        if let updated = (accounts.compactMap(\.latestObservation) + [runtime.activity?.activity.observedAt].compactMap { $0 }).max() {
+                            Text("Updated \(updated.formatted(.relative(presentation: .named)))")
+                        } else { Text("No reading yet") }
+                    }.font(.system(size: 11)).foregroundStyle(Palette.dust).lineLimit(1)
+                    IconButton(symbol: "arrow.clockwise", label: "Refresh", spinning: refreshing) {
+                        guard !refreshing else { return }
+                        refreshing = true
+                        Task { await runtime.refresh(); refreshing = false }
                     }
+                    IconButton(symbol: "slider.horizontal.3", label: "Settings", action: showSettings)
                 }
+                SlidingSegments(options: [(.accounts, accounts.isEmpty ? "Accounts" : "Accounts  \(accounts.count)"), (.activity, "Activity")], selection: $view)
+            }
+            .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 12)
+            Divider().overlay(Palette.line)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    notices
+                    Group {
+                        if view == .accounts { VStack(alignment: .leading, spacing: 16) { accountList(accounts) } }
+                        else { RecordedActivity(runtime: runtime) }
+                    }.transition(.opacity.combined(with: .offset(y: 6)))
+                }.padding(14)
+            }
+            // A mouse's always-visible scroller takes width only while content overflows, which shifts the whole popover sideways.
+            .scrollIndicators(.never)
+            .scrollPosition($runtime.dashboardScrollPosition)
+            Divider().overlay(Palette.line)
+            HStack {
+                Spacer()
+                Button("Quit Tally") { NSApplication.shared.terminate(nil) }
+                    .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.dust)
+            }.padding(.horizontal, 14).padding(.vertical, 9)
+        }
+        .frame(width: 360).background(Palette.ground).foregroundStyle(Palette.ink)
+    }
+
+    @ViewBuilder private var notices: some View {
+        let messages = [runtime.refreshError, runtime.settingsError, runtime.snapshot?.status.inventory.error?.message].compactMap { $0 }
+        if runtime.listenerError != nil || !messages.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
                 if let error = runtime.listenerError {
-                    Text(error).font(.caption)
-                    Button("Retry web/API") { runtime.startServer() }
-                }
-                if let error = runtime.refreshError { Text(error).font(.caption) }
-                if let error = runtime.settingsError { Text(error).font(.caption) }
-                if let error = runtime.snapshot?.status.inventory.error { Text(error.message).font(.caption) }
-                if runtime.snapshot?.accounts.isEmpty != false {
-                    Text("No supported Accounts available. Manage Accounts and authentication in OpenCode, or check the database path in Settings.")
-                }
-                let accounts = runtime.snapshot?.accounts ?? []
-                if accounts.contains(where: \.pinned) {
-                    Text("Pinned").font(.caption).foregroundStyle(.secondary)
-                    ForEach(accounts.filter(\.pinned)) { account in AccountCard(account: account, runtime: runtime) }
-                }
-                let unpinned = accounts.filter { !$0.pinned }
-                ForEach(Array(unpinned.enumerated()), id: \.element.id) { index, account in
-                    if index == 0 || unpinned[index - 1].provider != account.provider {
-                        Text(ProviderArtwork.logos[account.provider]?.name ?? account.provider).font(.caption).foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(error)
+                        Spacer()
+                        Button("Retry") { runtime.startServer() }.buttonStyle(QuietButtonStyle())
                     }
+                }
+                ForEach(messages, id: \.self) { Text($0) }
+            }
+            .font(.system(size: 11.5)).fixedSize(horizontal: false, vertical: true)
+            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.ember.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    @ViewBuilder private func accountList(_ accounts: [Account]) -> some View {
+        if accounts.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("No accounts yet").font(.system(size: 17, weight: .semibold))
+                Text("Sign in to Anthropic, OpenAI, OpenCode Go, or xAI in OpenCode and they appear here. If you already have, check the database path in Settings.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.dust).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            let pinned = accounts.filter(\.pinned)
+            let others = accounts.filter { !$0.pinned }
+            if !pinned.isEmpty { ledger("Pinned", pinned) }
+            if !others.isEmpty { ledger(pinned.isEmpty ? "Accounts" : "Other accounts", others) }
+        }
+    }
+
+    private func ledger(_ title: String, _ accounts: [Account]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.dust).padding(.leading, 4)
+            VStack(spacing: 0) {
+                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                    if index > 0 { Divider().overlay(Palette.line) }
                     AccountCard(account: account, runtime: runtime)
                 }
-                RecordedActivity(runtime: runtime)
-                Divider()
-                HStack {
-                    Spacer()
-                    Button("Quit Tally") { NSApplication.shared.terminate(nil) }
-                }
-            }.padding(12)
-        }.scrollPosition($runtime.dashboardScrollPosition)
-            .frame(width: 360).background(scheme == .dark ? Color(red: 28/255, green: 28/255, blue: 30/255) : Color(red: 245/255, green: 245/255, blue: 247/255))
+            }
+            .background(Palette.panel, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line))
+        }
+    }
+}
+
+struct IconButton: View {
+    let symbol: String
+    let label: String
+    var spinning = false
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                .symbolEffect(.rotate, options: .repeat(.continuous), isActive: spinning)
+                .frame(width: 26, height: 26)
+                .background(hovering ? Palette.spent : Palette.wash, in: Circle())
+                .contentShape(Circle())
+                .animation(.easeOut(duration: 0.15), value: hovering)
+        }.buttonStyle(PressableStyle()).help(label).accessibilityLabel(label).onHover { hovering = $0 }
     }
 }
 
@@ -332,26 +395,28 @@ struct AccountCard: View {
     @State private var details = false
     @State var resetExplanation = false
     @State private var choosingColor = false
-    @Environment(\.colorScheme) private var scheme
     var body: some View {
+        let provider = ProviderArtwork.logos[account.provider]?.name ?? account.provider
+        let plan = account.groups.plan.data?.name
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
+            HStack(spacing: 10) {
                 Button { choosingColor.toggle() } label: {
-                    ProviderLogo(provider: account.provider, color: account.identityColorIndex)
+                    ProviderLogo(provider: account.provider, color: account.identityColorIndex, size: 15)
+                        .frame(width: 26, height: 26).background(Palette.wash, in: RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain)
                     .accessibilityLabel("Change icon color for \(account.name)")
                     .popover(isPresented: $choosingColor) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Icon color").font(.headline)
-                            HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Icon color").font(.system(size: 12, weight: .semibold))
+                            HStack(spacing: 4) {
                                 ForEach(ProviderArtwork.light.indices, id: \.self) { index in
                                     Button {
                                         Task { await runtime.setIdentityColor(account, index: index) }
                                         choosingColor = false
                                     } label: {
-                                        ProviderLogo(provider: account.provider, color: index, size: 22)
-                                            .padding(6)
-                                            .background(account.identityColorIndex == index ? Color.primary.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                                        ProviderLogo(provider: account.provider, color: index, size: 18)
+                                            .frame(width: 32, height: 32)
+                                            .background(account.identityColorIndex == index ? Palette.spent : .clear, in: RoundedRectangle(cornerRadius: 8))
                                     }.buttonStyle(.plain)
                                         .accessibilityLabel(["Monochrome", "Blue", "Orange", "Green", "Purple", "Pink"][index])
                                         .accessibilityAddTraits(account.identityColorIndex == index ? .isSelected : [])
@@ -359,94 +424,129 @@ struct AccountCard: View {
                             }
                         }.padding(12)
                     }
-                HStack(alignment: .firstTextBaseline) {
-                    Text(account.name).font(.headline)
-                    Text(account.groups.plan.data?.name ?? "Plan unknown").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(account.name).font(.system(size: 13.5, weight: .semibold)).lineLimit(1)
+                    Text(plan.map { provider.lowercased().hasSuffix($0.lowercased()) ? provider : "\(provider) \($0)" } ?? "\(provider) plan unknown")
+                        .font(.system(size: 11)).foregroundStyle(Palette.dust).lineLimit(1)
                 }
-                Spacer()
-                QuotaWarning(account: account, inventoryError: runtime.snapshot?.status.inventory.error)
+                Spacer(minLength: 6)
+                QuotaWarning(account: account, inventoryError: runtime.snapshot?.status.inventory.error).foregroundStyle(Palette.ember)
                 if account.command.acknowledgementRequired || runtime.resetOperations[account.id]?.acknowledgementRequired == true {
-                    Button { resetExplanation.toggle() } label: { Image(systemName: "exclamationmark.triangle") }
+                    Button { resetExplanation.toggle() } label: { Image(systemName: "exclamationmark.triangle").frame(width: 20, height: 20) }
+                        .buttonStyle(.plain).foregroundStyle(Palette.ember)
                         .accessibilityLabel("Unknown reset outcome for \(account.name)")
-                        .help("The reset outcome is unknown. Click to review and acknowledge it before using another credit.")
+                        .help("The reset outcome is unknown. Review and acknowledge it before using another credit.")
                 }
-                Button { details.toggle() } label: { Image(systemName: details ? "chevron.up" : "chevron.down") }
-                    .buttonStyle(.plain).accessibilityLabel("Details for \(account.name)")
-            }
-            HStack {
                 if account.active == true {
-                    Label("Active in OpenCode", systemImage: "checkmark.circle").font(.caption)
+                    Label("Active", systemImage: "circle.fill").labelStyle(ActiveLabelStyle())
+                        .help("Active in OpenCode").accessibilityLabel("Active in OpenCode")
                 } else {
-                    Button(runtime.switchingAccount == account.id ? "Switching…" : "Use in OpenCode") {
-                        Task { await runtime.activate(account) }
-                    }.font(.caption).disabled(runtime.switchingAccount != nil || account.active == nil)
-                    if account.active == nil { Text("Selection unavailable").font(.caption).foregroundStyle(.secondary) }
+                    Button(runtime.switchingAccount == account.id ? "Switching…" : "Use in OpenCode") { Task { await runtime.activate(account) } }
+                        .buttonStyle(QuietButtonStyle()).lineLimit(1).fixedSize().disabled(runtime.switchingAccount != nil || account.active == nil)
+                        .help(account.active == nil ? "Selection unavailable" : "Make this the account OpenCode uses")
                 }
             }
-            if let operation = runtime.resetOperations[account.id], operation.state != .pending,
-               !operation.acknowledgementRequired || resetExplanation {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(operation.displayMessage(for: account))
-                    if operation.acknowledgementRequired {
-                        Button("Acknowledge") { Task { await runtime.acknowledgeReset(account) } }
-                            .disabled(runtime.resetBusy.contains(account.id))
-                    }
-                }.font(.caption).accessibilityElement(children: .contain)
-            } else if resetExplanation && account.command.acknowledgementRequired {
-                Text("Outcome unknown. Reading the existing operation before acknowledgement.").font(.caption)
-            }
-            if let error = runtime.resetErrors[account.id] { Text(error).font(.caption) }
+            resetNotes
             let windows = account.overviewWindows
             if windows.isEmpty {
-                Text("?").font(.system(size: 30, weight: .semibold))
-                Rectangle().stroke(.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(height: 4)
-                Text(account.groups.quotas.observedAt == nil ? "Quota unavailable" : "No quota windows reported").font(.caption)
-            }
-            ForEach(windows) { window in
-                QuotaRow(window: window)
-            }
-            if account.provider == "anthropic" || account.provider == "xai" {
-                let extra = account.groups.extraUsage
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(account.provider == "xai" ? "PAYG" : "Extra usage")
-                        Spacer()
-                        Text(extraLabel(extra.data)).multilineTextAlignment(.trailing)
-                    }.font(.subheadline)
-                    if let data = extra.data, data.presentation == "bounded" {
-                        GeometryReader { geometry in
-                            ZStack(alignment: .leading) {
-                                Rectangle().fill(.secondary.opacity(0.15))
-                                Rectangle().fill(.primary).frame(width: geometry.size.width * (data.remainingPercent ?? 0) / 100)
-                            }
-                        }.frame(height: 4)
-                        Text("\(money(data.used)) used of \(money(data.limit))").font(.caption)
-                    }
-                    if extra.stale { Text(account.provider == "xai" ? "PAYG stale" : "Extra usage stale").font(.caption) }
+                VStack(alignment: .leading, spacing: 4) {
+                    TallyMeter(percent: nil, uncertain: true)
+                    Text(account.groups.quotas.observedAt == nil ? "Quota unavailable" : "No quota windows reported").font(.system(size: 11)).foregroundStyle(Palette.dust)
                 }
             }
-            if account.provider == "openai" { OpenAICreditDetails(account: account, runtime: runtime) }
+            VStack(spacing: 10) { ForEach(windows) { QuotaRow(window: $0) } }
             if let warmup = runtime.warmups[account.id], warmup.needsAttention {
                 Label("Auto warm-up: " + warmup.message, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.system(size: 11)).foregroundStyle(Palette.ember).fixedSize(horizontal: false, vertical: true)
             }
+            HStack(spacing: 12) {
+                facts
+                Spacer(minLength: 0)
+                Button { withAnimation(.spring(duration: 0.34, bounce: 0.12)) { details.toggle() } } label: {
+                    HStack(spacing: 3) {
+                        Text(details ? "Less" : "More")
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(details ? 180 : 0))
+                    }.font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.dust).contentShape(Rectangle())
+                }.buttonStyle(PressableStyle()).accessibilityLabel("Details for \(account.name)")
+            }.font(.system(size: 11))
             if details {
-                if let state = account.command.state {
-                    Text(state == "unknown" ? "Outcome unknown; open the card-header warning to acknowledge." : "Redeeming…").font(.caption)
-                    Text(account.command.blockingOperationId ?? "").font(.caption).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 14) {
+                    if account.command.state != nil {
+                        Text(account.command.state == "unknown" ? "Outcome unknown; open the warning to acknowledge." : "Redeeming…").font(.system(size: 11.5))
+                    }
+                    AccountDetails(account: account)
+                    if account.provider == "anthropic" || account.provider == "xai", let extra = account.groups.extraUsage.data, extra.presentation == "bounded" {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(account.provider == "xai" ? "PAYG" : "Extra usage").font(.system(size: 12, weight: .semibold))
+                            TallyMeter(percent: extra.remainingPercent)
+                            Text("\(money(extra.used)) used of \(money(extra.limit))").font(.system(size: 11)).foregroundStyle(Palette.dust)
+                        }
+                    }
+                    if account.provider == "openai" { OpenAICreditDetails(account: account, runtime: runtime) }
                 }
-                AccountDetails(account: account)
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 10))
+                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -6)).combined(with: .scale(scale: 0.98, anchor: .top)),
+                                        removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top))))
             }
-        }.padding(12).background(scheme == .dark ? Color(red: 44/255, green: 44/255, blue: 46/255) : .white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.2)))
+        }.padding(14)
     }
+
+    @ViewBuilder private var facts: some View {
+        let groups = account.groups
+        if account.provider == "anthropic" || account.provider == "xai" {
+            fact(account.provider == "xai" ? "PAYG" : "Extra", extraLabel(groups.extraUsage.data) + (groups.extraUsage.stale ? " (out of date)" : ""))
+        }
+        if account.provider == "openai" {
+            fact("Credits", groups.balances.data?.items.map { balance in
+                balance.unlimited == true ? "Unlimited" : "\(balance.quantity ?? "Unknown")\(balance.referenceValue.map { " (\($0.currency) \($0.amount))" } ?? "")"
+            }.joined(separator: ", ") ?? "Unavailable")
+            fact("Resets", groups.resetSummary.data?.availableCount.map(String.init) ?? "?")
+        }
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        (Text(label + " ").foregroundStyle(Palette.dust) + Text(value)).lineLimit(1)
+    }
+
+    @ViewBuilder private var resetNotes: some View {
+        if let operation = runtime.resetOperations[account.id], operation.state != .pending,
+           !operation.acknowledgementRequired || resetExplanation {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(operation.displayMessage(for: account)).fixedSize(horizontal: false, vertical: true)
+                if operation.acknowledgementRequired {
+                    Button("Acknowledge") { Task { await runtime.acknowledgeReset(account) } }
+                        .buttonStyle(QuietButtonStyle()).disabled(runtime.resetBusy.contains(account.id))
+                }
+            }
+            .font(.system(size: 11.5)).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.raised, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.line))
+            .accessibilityElement(children: .contain)
+        } else if resetExplanation && account.command.acknowledgementRequired {
+            Text("Outcome unknown. Reading the existing operation before acknowledgement.").font(.system(size: 11.5))
+        }
+        if let error = runtime.resetErrors[account.id] { Text(error).font(.system(size: 11.5)).foregroundStyle(Palette.ember) }
+    }
+
     private func money(_ money: Money?) -> String { money.map { "\($0.currency) \($0.amount)" } ?? "Unavailable" }
     private func extraLabel(_ extra: ExtraUsage?) -> String {
         switch extra?.presentation {
         case "off": "Off"
         case "used_only": "\(money(extra?.used)) used"
-        case "bounded": "\(money(extra?.remaining)) remaining"
+        case "bounded": "\(money(extra?.remaining)) left"
         default: "Unavailable"
         }
+    }
+}
+
+struct ActiveLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon.font(.system(size: 5))
+            configuration.title
+        }
+        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.active)
+        .padding(.horizontal, 8).frame(height: 20).background(Palette.active.opacity(0.13), in: Capsule())
     }
 }
 
@@ -478,12 +578,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let size = NSSize(width: 720, height: 860)
+            let size = NSSize(width: 560, height: 640)
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                                  styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.title = "Tally Settings"
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.contentMinSize = NSSize(width: 500, height: 420)
+            window.contentMinSize = NSSize(width: 480, height: 420)
             window.contentViewController = NSHostingController(rootView: TallySettings(runtime: runtime))
             window.setContentSize(size)
             window.center()

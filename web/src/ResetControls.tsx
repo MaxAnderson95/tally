@@ -1,6 +1,8 @@
 import { useEffect, useReducer, useState } from 'react'
 import type { Account, Credit } from './api'
 import { creditUsable, RedemptionClient, redemptionLabel } from './redemptions'
+import { Warning } from './QuotaRow'
+import { Collapse } from './motion'
 
 export function useResetControls(account: Account) {
   const [client] = useState(() => new RedemptionClient(account.id, {
@@ -33,22 +35,35 @@ export function useResetControls(account: Account) {
     const work = client.submit(credit.id); render()
     await work; render(); window.dispatchEvent(new Event('tally:operation'))
   }
+  const settled = !!client.operation && client.operation.state !== 'pending' && (!unknown || explanation)
+  const dismissible = settled && !client.operation?.acknowledgementRequired ? `${client.operation?.operationId}:${client.operation?.state}` : null
+  // Matches the Mac app: the window starts when the outcome is first visible, so a result settled while the page was hidden is not lost unseen.
+  useEffect(() => {
+    if (!dismissible) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const start = () => { if (!document.hidden && timer === undefined) timer = setTimeout(() => { client.dismiss(); render() }, 10_000) }
+    start()
+    document.addEventListener('visibilitychange', start)
+    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', start) }
+  }, [client, dismissible])
+  const reading = !!unknown && explanation && !client.operation
   return {
-    warning: unknown ? <button className="details-toggle" aria-label={`Unknown reset outcome for ${account.name}`} title="The reset outcome is unknown. Click to review and acknowledge it before using another credit." aria-expanded={explanation} onClick={() => setExplanation(!explanation)}><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z M10 7v5 M10 14v1" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg></button> : null,
+    warning: unknown ? <button className="flag-warning flag-button" aria-label={`Unknown reset outcome for ${account.name}`} title="The reset outcome is unknown. Review and acknowledge it before using another credit." aria-expanded={explanation} onClick={() => setExplanation(!explanation)}><Warning /></button> : null,
+    hasResult: settled || reading || !!client.error,
     result: <>
-      {client.operation && client.operation.state !== 'pending' && (!unknown || explanation) && <div className="reset-result" role={unknown ? 'alert' : 'status'}>
+      {settled && client.operation && <div className="reset-result" role={unknown ? 'alert' : 'status'}>
         <p>{redemptionLabel(client.operation, account)}</p>
         {client.operation.acknowledgementRequired && <button disabled={client.busy} onClick={async () => { const work = client.acknowledge(); render(); await work; render(); window.dispatchEvent(new Event('tally:operation')) }}>{client.busy ? 'Acknowledging…' : 'Acknowledge'}</button>}
       </div>}
-      {unknown && explanation && !client.operation && <p role="alert">Outcome unknown. Reading the existing operation before acknowledgement.</p>}
-      {client.error && <p role="alert">{client.error}</p>}
+      {reading && <p role="alert">Outcome unknown. Reading the existing operation before acknowledgement.</p>}
+      {client.error && <p className="note-warn" role="alert">{client.error}</p>}
     </>,
     action: (credit: Credit) => <>
-      {(confirming !== credit.id || blocked) && <button disabled={blocked || client.storageUnavailable || !creditUsable(credit)} onClick={() => setConfirming(credit.id)}>{blocked && (client.operation ? client.operation.selectedCreditId ?? client.operation.requestedCreditId : chosen) === credit.id && !unknown ? 'Redeeming…' : 'Use credit'}</button>}
-      {confirming === credit.id && !blocked && <div className="reset-confirm">
+      {(confirming !== credit.id || blocked) && <button className="quiet-button" disabled={blocked || client.storageUnavailable || !creditUsable(credit)} onClick={() => setConfirming(credit.id)}>{blocked && (client.operation ? client.operation.selectedCreditId ?? client.operation.requestedCreditId : chosen) === credit.id && !unknown ? 'Redeeming…' : 'Use credit'}</button>}
+      <Collapse open={confirming === credit.id && !blocked} className="reset-confirm">
         <p>Use this credit on <strong>{account.name}</strong>? This consumes one credit and cannot be undone.</p>
-        <div><button onClick={() => setConfirming(undefined)}>Cancel</button><button onClick={() => void submit(credit)}>Use credit</button></div>
-      </div>}
+        <div><button className="quiet-button" onClick={() => setConfirming(undefined)}>Cancel</button><button className="primary-button" onClick={() => void submit(credit)}>Use credit</button></div>
+      </Collapse>
     </>,
   }
 }
