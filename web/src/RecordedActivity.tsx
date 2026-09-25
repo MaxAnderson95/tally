@@ -10,14 +10,18 @@ const dayLabel = (date: string, options: Intl.DateTimeFormatOptions = { month: '
 // Provider-reported money charged beyond a plan. Local token history cannot tell which requests were billed this way.
 function ExtraUsageBilled({ accounts, disconnected }: { accounts: Account[]; disconnected: boolean }) {
   const billed = accounts.filter(account => (account.provider === 'anthropic' || account.provider === 'xai') && account.groups.extraUsage.data && account.groups.extraUsage.data.presentation !== 'unavailable')
-  const total = billed.reduce((sum, account) => {
+  // Providers report in their own units (xAI PAYG is credits), so each currency totals separately rather than hiding behind a dollar figure.
+  const totals = new Map<string, number>([['USD', 0]])
+  for (const account of billed) {
     const used = account.groups.extraUsage.data?.used
-    return used?.currency === 'USD' ? sum + Number(used.amount) : sum
-  }, 0)
+    if (used) totals.set(used.currency, (totals.get(used.currency) ?? 0) + Number(used.amount))
+  }
+  const headline = [...totals].filter(([currency, amount]) => currency === 'USD' || amount > 0)
+    .map(([currency, amount]) => currency === 'USD' ? usd(String(amount)) : `${amount.toLocaleString()} ${currency}`).join(' + ')
   return <section className="activity-panel" aria-labelledby="extra-billed-title">
     <header className="panel-head">
       <div><h2 id="extra-billed-title">Extra usage billed</h2><p className="muted">Real charges beyond your plans, this billing period, as reported by each provider.</p></div>
-      <Swap className="stat-value" value={usd(String(total))} />
+      <Swap className="stat-value" value={headline} />
     </header>
     {billed.length === 0 ? <p className="muted">No account reports extra usage.</p> : <ul className="billed">{billed.map(account => {
       const extra = account.groups.extraUsage.data!
@@ -89,11 +93,10 @@ export function RecordedActivity({ refresh, onObserved, accounts, disconnected }
     {group?.error && <p className="notice" role="alert">{group.error.message}</p>}
     <section className="activity-panel" aria-labelledby="plan-usage-title">
       <header className="panel-head">
-        <div><h2 id="plan-usage-title">Plan usage</h2><p className="muted">Tokens your subscriptions covered, and what they would cost at pay-as-you-go API prices.</p></div>
+        <div><h2 id="plan-usage-title">Token usage</h2><p className="muted">Tokens OpenCode recorded on this Mac, and what they would cost at pay-as-you-go API prices.</p></div>
         <Segmented label="Activity range" value={range} onChange={setRange} options={activityRanges} />
       </header>
       {!data ? <p className="loading">{group ? 'Activity unavailable' : 'Reading activity…'}</p> : <>
-        {data.range !== range && <p className="muted" role="status">Showing {activityRanges.find(item => item.value === data.range)?.label.toLowerCase()} while the requested range loads.</p>}
         <div className="stats">
           <div><span className="muted">Tokens</span><Swap className="stat-value" title={data.totals.tokens ? `${data.totals.tokens.total.toLocaleString()} tokens` : undefined} value={data.totals.rows === 0 ? '0' : data.totals.tokens ? compactTokens(data.totals.tokens.total) : 'Unknown'} /></div>
           <div><span className="muted">API equivalent</span><Swap className="stat-value" value={value ?? '$0'} /></div>

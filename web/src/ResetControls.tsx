@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import type { Account, Credit } from './api'
 import { creditUsable, RedemptionClient, redemptionLabel } from './redemptions'
 import { Warning } from './QuotaRow'
@@ -37,21 +37,26 @@ export function useResetControls(account: Account) {
   }
   const settled = !!client.operation && client.operation.state !== 'pending' && (!unknown || explanation)
   const dismissible = settled && !client.operation?.acknowledgementRequired ? `${client.operation?.operationId}:${client.operation?.state}` : null
-  // Matches the Mac app: the window starts when the outcome is first visible, so a result settled while the page was hidden is not lost unseen.
+  const resultRef = useRef<HTMLDivElement>(null)
+  // Matches the Mac app: the window starts when the outcome is first on screen, so a result that settles while the page,
+  // the Accounts view, or the row itself is out of sight is not dismissed unseen.
   useEffect(() => {
-    if (!dismissible) return
+    const element = resultRef.current
+    if (!dismissible || !element) return
     let timer: ReturnType<typeof setTimeout> | undefined
-    const start = () => { if (!document.hidden && timer === undefined) timer = setTimeout(() => { client.dismiss(); render() }, 10_000) }
-    start()
+    let inView = false
+    const start = () => { if (inView && !document.hidden && timer === undefined) timer = setTimeout(() => { client.dismiss(); render() }, 10_000) }
+    const observer = new IntersectionObserver(entries => { inView = entries.some(entry => entry.isIntersecting); start() })
+    observer.observe(element)
     document.addEventListener('visibilitychange', start)
-    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', start) }
+    return () => { clearTimeout(timer); observer.disconnect(); document.removeEventListener('visibilitychange', start) }
   }, [client, dismissible])
   const reading = !!unknown && explanation && !client.operation
   return {
     warning: unknown ? <button className="flag-warning flag-button" aria-label={`Unknown reset outcome for ${account.name}`} title="The reset outcome is unknown. Review and acknowledge it before using another credit." aria-expanded={explanation} onClick={() => setExplanation(!explanation)}><Warning /></button> : null,
     hasResult: settled || reading || !!client.error,
     result: <>
-      {settled && client.operation && <div className="reset-result" role={unknown ? 'alert' : 'status'}>
+      {settled && client.operation && <div ref={resultRef} className="reset-result" role={unknown ? 'alert' : 'status'}>
         <p>{redemptionLabel(client.operation, account)}</p>
         {client.operation.acknowledgementRequired && <button disabled={client.busy} onClick={async () => { const work = client.acknowledge(); render(); await work; render(); window.dispatchEvent(new Event('tally:operation')) }}>{client.busy ? 'Acknowledging…' : 'Acknowledge'}</button>}
       </div>}

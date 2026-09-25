@@ -27,6 +27,8 @@ final class Runtime: ObservableObject {
     private var outcomeShownAt: [String: Date] = [:]
     // Not @Published: the popover reads nothing from it, and publishing would re-evaluate every view on open and close.
     var dashboardVisible = false
+    // Settled outcomes appear on the Accounts view only, so their dismissal window waits while Activity is showing.
+    var accountsShown = true
     let owner: TallyOwner
     private var serverTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -131,7 +133,7 @@ final class Runtime: ObservableObject {
                 // journal recovery can settle an outcome hours after the reset. Anchoring the window to the
                 // owner's updatedAt, or to an observation nobody could see, expires the confirmation unseen.
                 // Releasing the entry also stops re-reading a finished operation.
-                guard dashboardVisible else { continue }
+                guard dashboardVisible, accountsShown else { continue }
                 let shownAt = outcomeShownAt[account.id] ?? now
                 outcomeShownAt[account.id] = shownAt
                 if now.timeIntervalSince(shownAt) >= 10 { resetOperations[account.id] = nil; outcomeShownAt[account.id] = nil }
@@ -320,6 +322,7 @@ struct Dashboard: View {
             }.padding(.horizontal, 14).padding(.vertical, 9)
         }
         .frame(width: 360).background(Palette.ground).foregroundStyle(Palette.ink)
+        .onChange(of: view) { _, value in runtime.accountsShown = value == .accounts }
     }
 
     @ViewBuilder private var notices: some View {

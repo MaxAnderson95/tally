@@ -12,8 +12,8 @@ struct RecordedActivity: View {
             if let error = group?.error { Text(error.message).foregroundStyle(Palette.ember) }
             panel {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Plan usage").font(.system(size: 13, weight: .bold))
-                    Text("Tokens your subscriptions covered, and what they would cost at pay-as-you-go API prices.")
+                    Text("Token usage").font(.system(size: 13, weight: .bold))
+                    Text("Tokens OpenCode recorded on this Mac, and what they would cost at pay-as-you-go API prices.")
                         .font(.system(size: 11)).foregroundStyle(Palette.dust).fixedSize(horizontal: false, vertical: true)
                 }
                 SlidingSegments(options: ActivityRange.allCases.map { ($0, $0.label) }, selection: $runtime.activityRange)
@@ -60,7 +60,11 @@ struct RecordedActivity: View {
     // Provider-reported money charged beyond a plan. Local token history cannot tell which requests were billed this way.
     @ViewBuilder private var extraUsage: some View {
         let billed = (runtime.snapshot?.accounts ?? []).filter { ($0.provider == "anthropic" || $0.provider == "xai") && $0.groups.extraUsage.data.map { $0.presentation != "unavailable" } == true }
-        let total = billed.compactMap { $0.groups.extraUsage.data?.used }.filter { $0.currency == "USD" }.reduce(0) { $0 + (Double($1.amount) ?? 0) }
+        // Providers report in their own units (xAI PAYG is credits), so each currency totals separately rather than hiding behind a dollar figure.
+        let used = billed.compactMap { $0.groups.extraUsage.data?.used }
+        let others = Dictionary(grouping: used.filter { $0.currency != "USD" }, by: \.currency).mapValues { $0.reduce(0) { $0 + (Double($1.amount) ?? 0) } }.filter { $0.value > 0 }
+        let total = ([Self.money(String(used.filter { $0.currency == "USD" }.reduce(0) { $0 + (Double($1.amount) ?? 0) }))]
+                     + others.keys.sorted().map { "\(others[$0]!.formatted()) \($0)" }).joined(separator: " + ")
         panel {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -69,7 +73,7 @@ struct RecordedActivity: View {
                         .font(.system(size: 11)).foregroundStyle(Palette.dust).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Text(Self.money(String(total))).font(.readout(17, weight: .bold))
+                Text(total).font(.readout(17, weight: .bold))
                     .contentTransition(.numericText()).animation(.snappy, value: total)
             }
             if billed.isEmpty { Text("No account reports extra usage.").foregroundStyle(Palette.dust) }
