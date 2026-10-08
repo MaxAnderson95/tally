@@ -435,13 +435,34 @@ public actor TallyOwner {
 
     private func enterDatabase(_ identity: DatabaseFileIdentity) {
         var key = namespaceKey(for: identity.stable)
-        if store.state.namespaces[key] == nil,
-           let legacy = store.state.namespaces[identity.legacy], legacy.databaseFileIdentity == nil {
-            key = identity.legacy
-        }
+        if store.state.namespaces[key] == nil, let legacy = priorBootNamespace(for: identity) { key = legacy }
         enterNamespace(key)
         // Keep the original namespace key so durable commands retain their original target association.
         store.state.namespaces[key]?.databaseFileIdentity = identity.stable
+    }
+
+    private func priorBootNamespace(for identity: DatabaseFileIdentity) -> String? {
+        let candidates = store.state.namespaces.filter { $0.value.databaseFileIdentity == nil }.sorted {
+            let left = $0.value.observedAt ?? .distantPast, right = $1.value.observedAt ?? .distantPast
+            return left != right ? left > right : $0.key < $1.key
+        }
+        guard let newest = candidates.first?.key else { return nil }
+        let keys = Set(candidates.map(\.key))
+        var matched: Set<String> = []
+        if keys.contains(identity.legacy) {
+            if identity.legacy == newest { return newest }
+            matched.insert(identity.legacy)
+        }
+        // Darwin generates filesystem IDs with a 16-bit mount counter. Legacy hashes retain no raw device number;
+        // vary that counter only, keeping this file's inode and exact birthtime rather than matching Account credentials.
+        for minor in 1...UInt16.max {
+            let key = identityDigest("\(identity.legacyDeviceMajor | Int64(minor)):\(identity.legacyFileIdentity)")
+            if keys.contains(key) {
+                if key == newest { return key }
+                matched.insert(key)
+            }
+        }
+        return candidates.first { matched.contains($0.key) }?.key
     }
 
     private func readInventory() throws -> InventoryRead {

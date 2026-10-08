@@ -33,6 +33,8 @@ struct InventoryRead: Sendable {
 struct DatabaseFileIdentity: Sendable {
     var stable: String
     var legacy: String
+    var legacyDeviceMajor: Int64
+    var legacyFileIdentity: String
 }
 
 public struct OpenCodeInventory: Sendable {
@@ -66,7 +68,9 @@ public struct OpenCodeInventory: Sendable {
         }
         // macOS can renumber filesystem devices at boot; the volume UUID survives that renumbering.
         return DatabaseFileIdentity(stable: identityDigest("\(volume):\(inode):\(created.timeIntervalSince1970)"),
-                                    legacy: identityDigest("\(device):\(inode):\(created.timeIntervalSince1970)"))
+                                    legacy: identityDigest("\(device):\(inode):\(created.timeIntervalSince1970)"),
+                                    legacyDeviceMajor: device.int64Value & ~0x00ff_ffff,
+                                    legacyFileIdentity: "\(inode):\(created.timeIntervalSince1970)")
     }
 
     func read() throws -> InventoryRead {

@@ -1457,7 +1457,7 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(try await owner.identityEvidence(accountID: crossNamespace.id).relation(to: evidence) == .same)
 }
 
-@Test func preferencesSurviveDeviceRenumberingAndLegacyMigration() async throws {
+@Test(arguments: [0, -1, 1]) func preferencesSurviveDeviceRenumberingAndLegacyMigration(deviceOffset: Int) async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -1474,7 +1474,7 @@ private final class InventoryScenario: @unchecked Sendable {
     let created = try #require(attributes[.creationDate] as? Date).timeIntervalSince1970
     let volume = try #require(database.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString)
     let stable = identityDigest("\(volume):\(inode):\(created)")
-    let legacy = identityDigest("\(device):\(inode):\(created)")
+    let legacy = identityDigest("\(device + deviceOffset):\(inode):\(created)")
     let previousDevice = identityDigest("\(device + 1):\(inode):\(created)")
     let entries = ["a", "b", "c"].map { StoredCredential(storedID: $0, name: $0.uppercased(), key: "synthetic-\($0)") }
     let original = TallyOwner(clock: { Date() }, storageURL: storage, inventory: {
@@ -1487,6 +1487,14 @@ private final class InventoryScenario: @unchecked Sendable {
     try await original.setUnpinnedOrder([accounts[2].id, accounts[0].id])
     try await original.setWarmup(accountID: accounts[0].id, enabled: true, model: "opencode-go/cheap")
     await original.waitForCollection()
+    var history = AccountIdentityStore(url: storage)
+    var older = try #require(history.state.namespaces[legacy])
+    older.observedAt = .distantPast
+    older.pinnedOrder = []
+    older.warmups = [:]
+    let olderDevice = deviceOffset == 0 ? device + 2 : device
+    history.state.namespaces[identityDigest("\(olderDevice):\(inode):\(created)")] = older
+    try history.save()
     // Start a new owner without shutdown: every user change must already be on disk.
     let migrated = TallyOwner(databasePath: database.path, appBuild: "updated-build", storageURL: storage)
     try await migrated.refresh(accountIDs: [])
@@ -1514,10 +1522,22 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await rebooted.warmupStatuses()[accounts[0].id]?.enabled == true)
     #expect(await rebooted.warmupStatuses()[accounts[0].id]?.model == "opencode-go/cheap")
     #expect(restored.status.inventory.data?.namespaceId == namespace["id"] as? String)
-    #expect(AccountIdentityStore(url: storage).state.namespaces.count == 1)
+    #expect(AccountIdentityStore(url: storage).state.namespaces.count == 2)
     #expect(try OpenCodeInventory(path: database.path).databaseIdentity() == stable)
     #expect(await rebooted.activityResponse().activity.error == nil)
     #expect(await rebooted.activityResponse().activity.data?.source.namespaceId == namespace["id"] as? String)
+    if deviceOffset == 0 {
+        let replacement = directory.appendingPathComponent("replacement.db")
+        try FileManager.default.copyItem(at: database, to: replacement)
+        let independent = TallyOwner(databasePath: replacement.path, appBuild: "replacement", storageURL: storage)
+        try await independent.refresh(accountIDs: [])
+        await independent.waitForCollection()
+        let separate = await independent.snapshot()
+        #expect(Set(separate.accounts.map(\.id)).isDisjoint(with: accounts.map(\.id)))
+        #expect(separate.accounts.allSatisfy { $0.pinned })
+        #expect(separate.accounts.first?.identityColorIndex == 0)
+        #expect(await independent.warmupStatuses().isEmpty)
+    }
 }
 
 @Test func filesystemNamespaceAndSchemaFailuresAreIndependent() async throws {
@@ -1548,6 +1568,7 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(await owner.snapshot().accounts.first?.id != first.accounts.first?.id)
     try await owner.setDatabasePath(old)
     #expect(await owner.snapshot().accounts.first?.id == first.accounts.first?.id)
+    await owner.waitForCollection()
     var db: OpaquePointer?
     #expect(sqlite3_open(old, &db) == SQLITE_OK)
     #expect(sqlite3_exec(db, "ALTER TABLE credential RENAME COLUMN value TO incompatible", nil, nil, nil) == SQLITE_OK)
