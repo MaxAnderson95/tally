@@ -1250,6 +1250,7 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(returned.accounts.filter(\.pinned).map(\.id) == pins)
     #expect(returned.accounts[0].groups.quotas.data != nil)
     #expect(returned.accounts[0].groups.quotas.stale)
+    await owner.shutdown()
     var legacy = AccountIdentityStore(url: storage)
     for key in legacy.state.namespaces.keys { legacy.state.namespaces[key]?.pinnedOrder = nil }
     try legacy.save()
@@ -1456,6 +1457,69 @@ private final class InventoryScenario: @unchecked Sendable {
     #expect(try await owner.identityEvidence(accountID: crossNamespace.id).relation(to: evidence) == .same)
 }
 
+@Test func preferencesSurviveDeviceRenumberingAndLegacyMigration() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = directory.appendingPathComponent("opencode.db")
+    let storage = directory.appendingPathComponent("accounts.json")
+    var db: OpaquePointer?
+    #expect(sqlite3_open(database.path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "CREATE TABLE credential (id TEXT, label TEXT, value TEXT, integration_id TEXT, time_created INTEGER, active INTEGER); INSERT INTO credential VALUES ('a', 'Alpha', '{\"type\":\"key\",\"key\":\"synthetic-a\"}', 'opencode-go', 1, 1), ('b', 'Beta', '{\"type\":\"key\",\"key\":\"synthetic-b\"}', 'opencode-go', 2, 0), ('c', 'Gamma', '{\"type\":\"key\",\"key\":\"synthetic-c\"}', 'opencode-go', 3, 0);", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "CREATE TABLE session_v2 (id TEXT, fork_session_id TEXT, fork_boundary TEXT, time_created INTEGER); CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+    let attributes = try FileManager.default.attributesOfItem(atPath: database.path)
+    let device = try #require(attributes[.systemNumber] as? NSNumber).intValue
+    let inode = try #require(attributes[.systemFileNumber] as? NSNumber)
+    let created = try #require(attributes[.creationDate] as? Date).timeIntervalSince1970
+    let volume = try #require(database.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString)
+    let stable = identityDigest("\(volume):\(inode):\(created)")
+    let legacy = identityDigest("\(device):\(inode):\(created)")
+    let previousDevice = identityDigest("\(device + 1):\(inode):\(created)")
+    let entries = ["a", "b", "c"].map { StoredCredential(storedID: $0, name: $0.uppercased(), key: "synthetic-\($0)") }
+    let original = TallyOwner(clock: { Date() }, storageURL: storage, inventory: {
+        InventoryRead(databaseIdentity: legacy, credentials: entries)
+    }, collect: { _ in throw Fault("unexpected", "No provider requests expected.") })
+    try await original.refresh(accountIDs: [])
+    let accounts = await original.snapshot().accounts
+    try await original.setPins([accounts[1].id])
+    try await original.setIdentityColor(accountID: accounts[0].id, index: 5)
+    try await original.setUnpinnedOrder([accounts[2].id, accounts[0].id])
+    try await original.setWarmup(accountID: accounts[0].id, enabled: true, model: "opencode-go/cheap")
+    await original.waitForCollection()
+    // Start a new owner without shutdown: every user change must already be on disk.
+    let migrated = TallyOwner(databasePath: database.path, appBuild: "updated-build", storageURL: storage)
+    try await migrated.refresh(accountIDs: [])
+    await migrated.waitForCollection()
+    #expect(await migrated.snapshot().accounts.map(\.id) == [accounts[1].id, accounts[2].id, accounts[0].id])
+    #expect(await migrated.activityResponse().activity.error == nil)
+    #expect(await migrated.activityResponse().activity.data != nil)
+    var saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: storage)) as? [String: Any])
+    var namespaces = try #require(saved["namespaces"] as? [String: [String: Any]])
+    var namespace = try #require(namespaces[legacy])
+    namespaces[legacy] = nil
+    #expect(namespace["databaseFileIdentity"] as? String == stable)
+    // Replay the on-disk state from a boot with a different device number.
+    namespace["databaseFileIdentity"] = stable
+    namespaces[previousDevice] = namespace
+    saved["namespaces"] = namespaces
+    try JSONSerialization.data(withJSONObject: saved).write(to: storage, options: .atomic)
+    let rebooted = TallyOwner(databasePath: database.path, appBuild: "reinstalled-build", storageURL: storage)
+    try await rebooted.refresh(accountIDs: [])
+    await rebooted.waitForCollection()
+    let restored = await rebooted.snapshot()
+    #expect(restored.accounts.map(\.id) == [accounts[1].id, accounts[2].id, accounts[0].id])
+    #expect(restored.accounts.first?.pinned == true)
+    #expect(restored.accounts.last?.identityColorIndex == 5)
+    #expect(await rebooted.warmupStatuses()[accounts[0].id]?.enabled == true)
+    #expect(await rebooted.warmupStatuses()[accounts[0].id]?.model == "opencode-go/cheap")
+    #expect(restored.status.inventory.data?.namespaceId == namespace["id"] as? String)
+    #expect(AccountIdentityStore(url: storage).state.namespaces.count == 1)
+    #expect(try OpenCodeInventory(path: database.path).databaseIdentity() == stable)
+    #expect(await rebooted.activityResponse().activity.error == nil)
+    #expect(await rebooted.activityResponse().activity.data?.source.namespaceId == namespace["id"] as? String)
+}
+
 @Test func filesystemNamespaceAndSchemaFailuresAreIndependent() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1516,6 +1580,30 @@ private final class InventoryScenario: @unchecked Sendable {
     scenario.set(entries)
     try await owner.refresh(accountIDs: [])
     #expect(await owner.snapshot().accounts.map(\.id) == first.accounts.map(\.id))
+}
+
+@Test func competingOwnersCannotOverwriteSavedPreferences() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = directory.appendingPathComponent("accounts.json")
+    let scenario = InventoryScenario()
+    scenario.set([StoredCredential(storedID: "a", name: "A", key: "synthetic")])
+    let first = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No provider requests expected.") })
+    try await first.refresh(accountIDs: [])
+    let accountID = try #require(await first.snapshot().accounts.first?.id)
+    let second = TallyOwner(clock: { Date() }, storageURL: storage, inventory: { try scenario.read() }, collect: { _ in throw Fault("unexpected", "No provider requests expected.") })
+    try await first.setIdentityColor(accountID: accountID, index: 5)
+    try await first.setPins([])
+    try await first.setWarmup(accountID: accountID, enabled: true, model: "opencode-go/cheap")
+    let saved = try Data(contentsOf: storage)
+    try await second.refresh(accountIDs: [])
+    #expect(await second.settingsError()?.code == "settings_storage_unavailable")
+    #expect(try Data(contentsOf: storage) == saved)
+    await #expect(throws: Fault.self) { try await second.setIdentityColor(accountID: accountID, index: 2) }
+    await second.shutdown()
+    #expect(try Data(contentsOf: storage) == saved)
+    try await first.setIdentityColor(accountID: accountID, index: 4)
+    #expect(await first.settingsError() == nil)
 }
 
 @Test func preferenceWriteFailureDoesNotStopCollectionOrClaimSavedPins() async throws {
@@ -1875,6 +1963,10 @@ private final class SchedulingScenario: @unchecked Sendable {
     let owner = scenario.owner(storage: storage)
     try await owner.refresh(); await owner.waitForCollection()
     let first = await owner.snapshot()
+    #expect(await owner.settingsError()?.code == "settings_storage_unavailable")
+    #expect(try String(contentsOf: storage, encoding: .utf8) == "{damaged")
+    await #expect(throws: Fault.self) { try await owner.setIdentityColor(accountID: first.accounts[0].id, index: 5) }
+    #expect(try String(contentsOf: storage, encoding: .utf8) == "{damaged")
     scenario.advance(299)
     #expect(await owner.snapshot().accounts[0].groups.quotas.stale == false)
     scenario.advance(1)
@@ -1883,7 +1975,13 @@ private final class SchedulingScenario: @unchecked Sendable {
     #expect(aged.accounts[0].groups.quotas.observedAt == first.accounts[0].groups.quotas.observedAt)
     #expect(aged.accounts[0].groups.quotas.data?.windows[0].pacing == nil)
     #expect(scenario.count("a") == 1)
-    var cache = AccountIdentityStore(url: storage)
+    // Explicitly replace the damaged fixture before testing duplicate-record recovery.
+    var cache = AccountIdentityStore(url: nil)
+    cache.state.namespaces["db"] = InventoryNamespace(records: first.accounts.map {
+        IdentityRecord(evidence: StoredCredential(storedID: $0.name.lowercased(), name: $0.name, key: $0.name.lowercased()).evidence, account: $0, present: true)
+    })
+    try Wire.encoder().encode(cache.state).write(to: storage, options: .atomic)
+    cache = AccountIdentityStore(url: storage)
     let duplicate = try #require(cache.state.namespaces["db"]?.records.first)
     cache.state.namespaces["db"]?.records.append(duplicate)
     try cache.save()

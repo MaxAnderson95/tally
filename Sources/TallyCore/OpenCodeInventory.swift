@@ -30,6 +30,11 @@ struct InventoryRead: Sendable {
     var credentials: [StoredCredential]
 }
 
+struct DatabaseFileIdentity: Sendable {
+    var stable: String
+    var legacy: String
+}
+
 public struct OpenCodeInventory: Sendable {
     public let path: String
     public init(path: String) { self.path = path }
@@ -42,15 +47,26 @@ public struct OpenCodeInventory: Sendable {
     }
 
     func databaseIdentity() throws -> String {
+        try databaseFileIdentity().stable
+    }
+
+    func databaseFileIdentity() throws -> DatabaseFileIdentity {
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
         let attributes: [FileAttributeKey: Any]
-        do { attributes = try FileManager.default.attributesOfItem(atPath: URL(fileURLWithPath: path).resolvingSymlinksInPath().path) }
+        let volume: String?
+        do {
+            attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            volume = try url.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
+        }
         catch { throw Fault("inventory_unavailable", "Cannot read the OpenCode database. Check its path in Tally settings.") }
-        guard let device = attributes[.systemNumber] as? NSNumber,
+        guard let volume, let device = attributes[.systemNumber] as? NSNumber,
               let inode = attributes[.systemFileNumber] as? NSNumber,
               let created = attributes[.creationDate] as? Date else {
             throw Fault("inventory_unavailable", "Cannot identify the OpenCode database.")
         }
-        return identityDigest("\(device):\(inode):\(created.timeIntervalSince1970)")
+        // macOS can renumber filesystem devices at boot; the volume UUID survives that renumbering.
+        return DatabaseFileIdentity(stable: identityDigest("\(volume):\(inode):\(created.timeIntervalSince1970)"),
+                                    legacy: identityDigest("\(device):\(inode):\(created.timeIntervalSince1970)"))
     }
 
     func read() throws -> InventoryRead {
