@@ -2,7 +2,7 @@ import Foundation
 
 public actor TallyOwner {
     private var inventorySource: @Sendable () throws -> InventoryRead
-    private var identifySource: (@Sendable () throws -> String)?
+    private var identifySource: (@Sendable () throws -> DatabaseFileIdentity)?
     private let collections: @Sendable (StoredCredential) -> [CollectionJob]
     private var scanActivity: @Sendable (Date) async throws -> ActivityScan
     private let timezone: @Sendable () -> TimeZone
@@ -49,7 +49,7 @@ public actor TallyOwner {
         let source = OpenCodeInventory(path: databasePath)
         self.databasePath = databasePath
         inventorySource = { try source.read() }
-        identifySource = { try source.databaseIdentity() }
+        identifySource = { try source.databaseFileIdentity() }
         store = AccountIdentityStore(url: storageURL)
         let usage = GoUsage()
         let anthropic = AnthropicUsage()
@@ -196,7 +196,7 @@ public actor TallyOwner {
         guard let selected = credentials[accountID] else { throw Fault("account_not_found", "Account not found. Refresh the inventory.") }
         let namespace = databaseIdentity
         inventory.stale = true
-        let current = try inventorySource()
+        let current = try readInventory()
         guard current.databaseIdentity == namespace,
               let credential = current.credentials.first(where: { $0.storedID == selected.storedID && $0.provider == selected.provider }),
               credential.evidence.relation(to: selected.evidence) == .same else {
@@ -210,11 +210,11 @@ public actor TallyOwner {
         do { try await activateCredential(credential, databasePath) }
         catch {
             // A lost response can follow a successful switch. Refresh state, but never replay the command.
-            if databaseIdentity == namespace, let latest = try? inventorySource(), latest.databaseIdentity == namespace { reconcile(latest) }
+            if databaseIdentity == namespace, let latest = try? readInventory(), latest.databaseIdentity == namespace { reconcile(latest) }
             throw error
         }
         guard databaseIdentity == namespace else { throw Fault("account_changed", "Tally's database changed during the switch. Refresh the inventory.") }
-        let latest = try inventorySource()
+        let latest = try readInventory()
         guard latest.databaseIdentity == namespace else { throw Fault("account_changed", "OpenCode's database changed during the switch. Refresh the inventory.") }
         reconcile(latest)
         guard snapshot().accounts.first(where: { $0.id == accountID })?.active == true else {
@@ -251,7 +251,7 @@ public actor TallyOwner {
 
     private func warmupCredential(accountID: String) throws -> StoredCredential {
         guard let selected = credentials[accountID] else { throw Fault("account_not_found", "Account disappeared.") }
-        let current = try inventorySource()
+        let current = try readInventory()
         guard current.databaseIdentity == databaseIdentity,
               let credential = current.credentials.first(where: { $0.storedID == selected.storedID && $0.provider == selected.provider }),
               credential.workspace == selected.workspace else {
@@ -340,9 +340,10 @@ public actor TallyOwner {
         databasePath = path
         let source = OpenCodeInventory(path: path)
         inventorySource = { try source.read() }
-        identifySource = { try source.databaseIdentity() }
+        identifySource = { try source.databaseFileIdentity() }
         scanActivity = { cutoff in try await OpenCodeActivity(path: path).scan(cutoff: cutoff) }
-        if (try? source.databaseIdentity()) != databaseIdentity { leaveNamespace() }
+        if let identity = try? source.databaseFileIdentity() { enterDatabase(identity) }
+        else { leaveNamespace() }
         try refresh(accountIDs: [])
     }
 
@@ -426,6 +427,48 @@ public actor TallyOwner {
         activityTask?.cancel(); activityTask = nil; activity = Group(); activityViews = [:]
         tasks = [:]; attempts = [:]; accounts = []; credentials = [:]; inventory = Group(); databaseIdentity = nil
         nextInventoryAt = nil
+    }
+
+    private func namespaceKey(for stableIdentity: String) -> String {
+        store.state.namespaces.first { $0.value.databaseFileIdentity == stableIdentity }?.key ?? stableIdentity
+    }
+
+    private func enterDatabase(_ identity: DatabaseFileIdentity) {
+        var key = namespaceKey(for: identity.stable)
+        if store.state.namespaces[key] == nil, let legacy = priorBootNamespace(for: identity) { key = legacy }
+        enterNamespace(key)
+        // Keep the original namespace key so durable commands retain their original target association.
+        store.state.namespaces[key]?.databaseFileIdentity = identity.stable
+    }
+
+    private func priorBootNamespace(for identity: DatabaseFileIdentity) -> String? {
+        let candidates = store.state.namespaces.filter { $0.value.databaseFileIdentity == nil }.sorted {
+            let left = $0.value.observedAt ?? .distantPast, right = $1.value.observedAt ?? .distantPast
+            return left != right ? left > right : $0.key < $1.key
+        }
+        guard let newest = candidates.first?.key else { return nil }
+        let keys = Set(candidates.map(\.key))
+        var matched: Set<String> = []
+        if keys.contains(identity.legacy) {
+            if identity.legacy == newest { return newest }
+            matched.insert(identity.legacy)
+        }
+        // Darwin generates filesystem IDs with a 16-bit mount counter. Legacy hashes retain no raw device number;
+        // vary that counter only, keeping this file's inode and exact birthtime rather than matching Account credentials.
+        for minor in 1...UInt16.max {
+            let key = identityDigest("\(identity.legacyDeviceMajor | Int64(minor)):\(identity.legacyFileIdentity)")
+            if keys.contains(key) {
+                if key == newest { return key }
+                matched.insert(key)
+            }
+        }
+        return candidates.first { matched.contains($0.key) }?.key
+    }
+
+    private func readInventory() throws -> InventoryRead {
+        var incoming = try inventorySource()
+        incoming.databaseIdentity = namespaceKey(for: incoming.databaseIdentity)
+        return incoming
     }
 
     private func enterNamespace(_ identity: String) {
@@ -583,8 +626,8 @@ public actor TallyOwner {
         let now = clock()
         inventory.lastAttemptAt = now
         do {
-            if let identifySource { enterNamespace(try identifySource()) }
-            reconcile(try inventorySource())
+            if let identifySource { enterDatabase(try identifySource()) }
+            reconcile(try readInventory())
         } catch {
             let fault = error as? Fault ?? Fault("inventory_unavailable", "OpenCode inventory could not be read.")
             inventory.fail(fault, at: now)
@@ -682,7 +725,7 @@ public actor TallyOwner {
             var views: [String: ActivityData]?
             do {
                 let result = try await scan(now)
-                guard result.databaseIdentity == namespace, let namespaceID else { throw Fault("activity_unavailable", "Activity source identity changed; refresh the inventory.") }
+                guard namespaceKey(for: result.databaseIdentity) == namespace, let namespaceID else { throw Fault("activity_unavailable", "Activity source identity changed; refresh the inventory.") }
                 views = await Task.detached { result.derive(namespace: namespaceID, cutoff: now, timezone: zone, prices: book) }.value
             }
             catch { fault = error as? Fault ?? Fault("activity_unavailable", "Recorded activity could not be scanned.") }
@@ -810,8 +853,8 @@ public actor TallyOwner {
     private func currentRedemptionCredential(_ record: RedemptionRecord) throws -> StoredCredential {
         inventory.lastAttemptAt = clock()
         do {
-            if let identifySource { enterNamespace(try identifySource()) }
-            reconcile(try inventorySource())
+            if let identifySource { enterDatabase(try identifySource()) }
+            reconcile(try readInventory())
         } catch {
             let fault = Fault("inventory_unavailable", "Current OpenCode inventory could not be verified.")
             inventory.fail(fault, at: clock())
