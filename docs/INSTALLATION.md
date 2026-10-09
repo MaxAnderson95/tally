@@ -27,15 +27,24 @@ The macOS 26 job uses Xcode 26.6 and Node 22 to run the app build script, set th
 
 First launch saves loopback port 7483 and registers the main app with macOS ServiceManagement for launch at login. Settings shows the current login-item state and can disable it. If macOS requires approval, follow the displayed Login Items link. Registration failure remains visible and setup retries on next launch. Collection and HTTP run independently of the popover. Closing it leaves both running; Quit rejects commands, bounds redemption waiting to 15 seconds, and awaits HTTP shutdown. After a crash, reopen the app manually.
 
-Settings accepts a database path, stable port from 1024 through 65535, and optional exact HTTPS origin without a trailing slash/path, credentials, query or fragment. Invalid listener settings are rejected before saving. Port collision never selects another port. Native collection continues with a web/API-unavailable message and Retry. Save settings restarts the listener; Retry after failure creates a new server lifetime. OpenCode Account names and authentication stay in OpenCode.
+Settings accepts a database path, stable port from 1024 through 65535, optional exact HTTPS origin without a trailing slash/path, credentials, query or fragment, a web password, and an API token. Invalid listener settings are rejected before saving. Port collision never selects another port. Native collection continues with a web/API-unavailable message and Retry. Save settings restarts the listener; Retry after failure creates a new server lifetime. OpenCode Account names and authentication stay in OpenCode.
 
-## Personal Tailscale access
+## Authentication
 
-Configure a dedicated personal-tailnet HTTPS proxy independently to forward its root to `http://127.0.0.1:7483`, or the saved port. Preserve the external Host. Enter the exact external HTTPS origin in Tally Settings and use it as the companion `baseURL`. For example, an origin `https://tally.example.ts.net` permits Host `tally.example.ts.net` and that browser mutation Origin. An explicit HTTPS port must also appear in Host and Origin. This example is not a provisioned endpoint.
+The web UI and API stay off until Settings has a web password, an API token, or both ([ADR 0002](adr/0002-app-level-http-auth.md)). Tally saves them in the login Keychain as `TALLY_SERVE_PASSWORD` and `TALLY_SERVE_TOKEN` under service `net.maxanderson.tally`. Generate long random values, for example `openssl rand -base64 32`, and put the token in `~/.env_private` as `TALLY_SERVE_TOKEN=...` so the companion (through OpenCode's service environment) and shell clients send the same value. Loopback clients need the token too.
 
-Tally allows its loopback authorities and configured external authority only. Mutations require `application/json`; browser Origin must match loopback or the configured origin. Trusted non-browser clients may omit Origin. No permissive CORS header is emitted. Personal tailnet policy controls access; Tally supplies no additional bearer token. Never expose this API to the public internet.
+- **Browser:** sign in with the password, then open Settings > Sign-in and add a passkey. Later sign-ins use Face ID or Touch ID. A passkey works only at the address it was added from: `http://localhost:<port>` or the configured HTTPS origin. `127.0.0.1` supports the password only. Sessions last 30 days and survive app restarts.
+- **Scripts and the companion:** send `Authorization: Bearer $TALLY_SERVE_TOKEN`.
 
-On Max's Mac, the rootless Tailscale CLI uses `--socket="$HOME/.config/tailscale/tailscaled.sock"`. Inspect existing exposure with `tailscale --socket="$HOME/.config/tailscale/tailscaled.sock" serve status --json`. Adding a new service can reset approval for other services on this node, so configure and approve Tally as a separate operational task. The installation verification found no existing Tally exposure and changed no tailnet service.
+Sessions are signed with a key in `~/Library/Application Support/Tally/serve-state.json`, which also holds the passkeys. Changing the password or token does not sign browsers out. Delete that file to end every session; it also removes every passkey. Tally is ad-hoc signed, so a rebuilt app can ask once to read its Keychain items; choose Always Allow.
+
+## HTTPS access from other devices
+
+Run a tunnel or proxy that forwards a public HTTPS hostname to `http://127.0.0.1:7483`, or the saved port, and preserves the external Host: OpenTunnel (`https://<route>.<id>.opentunnel.xyz`) or a personal Tailscale Serve proxy. Enter that exact HTTPS origin in Tally Settings and use it as the companion `baseURL`. For example, an origin `https://tally.example.opentunnel.xyz` permits Host `tally.example.opentunnel.xyz` and that browser mutation Origin. An explicit HTTPS port must also appear in Host and Origin. This example is not a provisioned endpoint.
+
+Tally allows its loopback authorities and configured external authority only. Requests for the configured Host are treated as HTTPS, because the tunnel ends TLS and forwards plain HTTP. That Host sets the passkey origin and the `Secure` cookie flag. Mutations require `application/json`; browser Origin must match loopback or the configured origin. Bearer clients may omit Origin. No permissive CORS header is emitted.
+
+On Max's Mac, the rootless Tailscale CLI uses `--socket="$HOME/.config/tailscale/tailscaled.sock"`. Inspect existing exposure with `tailscale --socket="$HOME/.config/tailscale/tailscaled.sock" serve status --json`. Adding a new service can reset approval for other services on this node, so configure and approve Tally as a separate operational task.
 
 ## Download approval and replacement
 

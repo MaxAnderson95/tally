@@ -3,6 +3,7 @@ import type { Account } from './api'
 import { ProviderLogo, providerName } from './ProviderLogo'
 import { WarmupPreferences, type useWarmups } from './WarmupPreferences'
 import { Segmented, useDialogMotion, usePresence } from './motion'
+import { SignInPreferences } from './auth'
 
 export type PreferenceChange = { kind: 'color'; accountId: string; index: number } | { kind: 'pins' | 'unpinned-order'; accountIds: string[] }
 type SavePreference = (change: PreferenceChange) => Promise<boolean>
@@ -35,10 +36,10 @@ export function ColorPicker({ account, save, disabled }: { account: Account; sav
   </div>
 }
 
-export function AccountPreferences({ accounts, open, close, save, disabled, error, timezone, warmups }: { accounts: Account[]; open: boolean; close: () => void; save: SavePreference; disabled: boolean; error: string | undefined; timezone: string; warmups: ReturnType<typeof useWarmups> }) {
+export function AccountPreferences({ accounts, open, close, save, disabled, error, timezone, warmups, signedOut }: { accounts: Account[]; open: boolean; close: () => void; save: SavePreference; disabled: boolean; error: string | undefined; timezone: string; warmups: ReturnType<typeof useWarmups>; signedOut: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const dismiss = useDialogMotion(dialog)
-  const [section, setSection] = useState<'warmup' | 'menu'>('warmup')
+  const [section, setSection] = useState<'warmup' | 'menu' | 'sign-in'>('warmup')
   useEffect(() => {
     if (open) dialog.current?.showModal()
     else dismiss()
@@ -53,7 +54,7 @@ export function AccountPreferences({ accounts, open, close, save, disabled, erro
   return <dialog ref={dialog} className="sheet settings-sheet" onClose={close} onCancel={event => { event.preventDefault(); close() }} onClick={event => { if (event.target === event.currentTarget) close() }} aria-labelledby="preferences-title">
     <div className="preferences-toolbar">
       <header><h2 id="preferences-title">Settings</h2><button className="quiet-button" onClick={close} aria-label="Close settings">Done</button></header>
-      <Segmented label="Settings section" value={section} onChange={setSection} options={[{ value: 'warmup', label: 'Warm-up' }, { value: 'menu', label: 'Menu bar' }] as const} />
+      <Segmented label="Settings section" value={section} onChange={setSection} options={[{ value: 'warmup', label: 'Warm-up' }, { value: 'menu', label: 'Menu bar' }, { value: 'sign-in', label: 'Sign-in' }] as const} />
     </div>
     <div className="preferences-content">
       {section === 'warmup' && open && <div className="view"><WarmupPreferences accounts={accounts} timezone={timezone} disabled={disabled} warmups={warmups} /></div>}
@@ -74,6 +75,7 @@ export function AccountPreferences({ accounts, open, close, save, disabled, erro
         </div>
       })}</div>
       </div>}
+      {section === 'sign-in' && open && <div className="view"><SignInPreferences signedOut={signedOut} /></div>}
       <p className="fine-print">Manage account names and authentication in OpenCode. Launch at login, database location, and connection settings are available in Tally on your Mac.</p>
     </div>
   </dialog>

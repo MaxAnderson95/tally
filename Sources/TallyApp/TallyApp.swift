@@ -16,6 +16,8 @@ final class Runtime: ObservableObject {
     @Published var databasePath: String
     @Published var port: String
     @Published var webOrigin: String
+    @Published var webPassword = ""
+    @Published var apiToken = ""
     @Published var settingsError: String?
     @Published var storageError: String?
     @Published var loginEnabled = false
@@ -36,11 +38,17 @@ final class Runtime: ObservableObject {
     private var wakeObserver: NSObjectProtocol?
     private let settings: UserDefaults
     private let assetDirectory: URL
+    private let secrets: ServeSecrets
+    private let authStateURL: URL
     private var stopping = false
 
-    init(owner: TallyOwner? = nil, settings: UserDefaults = .standard, assetDirectory: URL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Web")) {
+    init(owner: TallyOwner? = nil, settings: UserDefaults = .standard, assetDirectory: URL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Web"),
+         secrets: ServeSecrets = .keychain,
+         authStateURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Tally/serve-state.json")) {
         self.settings = settings
         self.assetDirectory = assetDirectory
+        self.secrets = secrets
+        self.authStateURL = authStateURL
         let path = settings.string(forKey: "databasePath") ?? OpenCodeInventory.defaultPath()
         databasePath = path
         port = String(settings.object(forKey: "port") as? Int ?? 7483)
@@ -53,6 +61,8 @@ final class Runtime: ObservableObject {
         if settings.object(forKey: "port") == nil { settings.set(Int(port), forKey: "port") }
         if !settings.bool(forKey: "loginSetupCompleted") { setLaunchAtLogin(true) }
         readLoginStatus()
+        webPassword = secrets.read(ServeSecrets.password)
+        apiToken = secrets.read(ServeSecrets.token)
         startServer()
         pollingTask = Task {
             await owner.wake()
@@ -162,13 +172,17 @@ final class Runtime: ObservableObject {
         guard serverTask == nil, !stopping else { return }
         guard validateListenerSettings() else { return }
         let number = Int(port)!
-        let policy = HTTPPolicy(port: number, webOrigin: webOrigin.isEmpty ? nil : webOrigin)
-        listenerError = nil
-        serverTask = Task {
-            do { try await makeHTTPApplication(owner: owner, policy: policy, assetDirectory: assetDirectory).run() }
-            catch { if !Task.isCancelled { listenerError = "Web/API unavailable on port \(number). Check the port and bundled assets, then retry." } }
-            serverTask = nil
-        }
+        let policy = HTTPPolicy(port: number, webOrigin: webOrigin.isEmpty ? nil : webOrigin, password: webPassword, token: apiToken)
+        let unavailable = "Web/API unavailable on port \(number). Check the port and bundled assets, then retry."
+        do {
+            let application = try makeHTTPApplication(owner: owner, policy: policy, assetDirectory: assetDirectory, authStateURL: authStateURL)
+            listenerError = nil
+            serverTask = Task {
+                do { try await application.run() }
+                catch { if !Task.isCancelled { listenerError = unavailable } }
+                serverTask = nil
+            }
+        } catch { listenerError = (error as? Fault)?.message ?? unavailable }
     }
 
     private func validateListenerSettings() -> Bool {
@@ -187,7 +201,11 @@ final class Runtime: ObservableObject {
         settings.set(databasePath, forKey: "databasePath")
         settings.set(number, forKey: "port")
         settings.set(webOrigin, forKey: "webOrigin")
-        do { try await owner.setDatabasePath(databasePath); settingsError = nil }
+        do {
+            try secrets.write(ServeSecrets.password, webPassword)
+            try secrets.write(ServeSecrets.token, apiToken)
+            try await owner.setDatabasePath(databasePath); settingsError = nil
+        }
         catch let fault as Fault { settingsError = fault.message }
         catch { settingsError = "Cannot read the selected database." }
         snapshot = await owner.snapshot()

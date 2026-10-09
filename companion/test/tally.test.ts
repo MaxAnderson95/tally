@@ -9,19 +9,22 @@ import { Input, Command, Result, AccountsResponse, ActivityResponse, RefreshResp
 import type { TallyInput } from '../src/contract.ts'
 import plugin from '../src/index.ts'
 
+// Tests pass tokens explicitly, so a developer shell's real token must not leak into requests.
+delete process.env.TALLY_SERVE_TOKEN
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../../Tests/TallyTests/Fixtures/${name}.json`, import.meta.url), 'utf8'))
 const accounts = AccountsResponse.parse(fixture('accounts'))
 const activity = ActivityResponse.parse(fixture('activity'))
 const refresh = RefreshResponse.parse(fixture('refresh'))
 const detail = { status: accounts.status, account: accounts.accounts[0] }
 
-async function serve(run: (baseURL: string, requests: { path: string; method: string; body: string; contentType?: string }[]) => Promise<void>, reply?: (path: string) => { status?: number; data: unknown }) {
-  const requests: { path: string; method: string; body: string; contentType?: string }[] = []
+type Recorded = { path: string; method: string; body: string; contentType?: string; authorization?: string }
+async function serve(run: (baseURL: string, requests: Recorded[]) => Promise<void>, reply?: (path: string) => { status?: number; data: unknown }) {
+  const requests: Recorded[] = []
   const server = createServer(async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
     const path = req.url ?? ''
-    requests.push({ path, method: req.method ?? '', body, contentType: req.headers['content-type'] })
+    requests.push({ path, method: req.method ?? '', body, ...(req.headers['content-type'] ? { contentType: req.headers['content-type'] } : {}), ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}) })
     const response = reply?.(path) ?? { data: path === '/api/v1/status' ? accounts.status : path === '/api/v1/accounts' ? accounts : path.startsWith('/api/v1/accounts/') ? detail : path.startsWith('/api/v1/activity') ? activity : refresh }
     res.writeHead(response.status ?? 200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(response.data))
@@ -310,4 +313,24 @@ test('reset inputs reject invalid UUIDs and app/version failure prevents mutatio
   const result = await createTally({ baseURL: closedURL }).execute({ action: 'redeem', accountId: 'opaque', operationId })
   assert.equal(result.output.ok, false)
   if (!result.output.ok) assert.equal(result.output.error.code, 'app_unavailable')
+})
+
+test('requests carry TALLY_SERVE_TOKEN as a bearer token and a rejected token returns a configuration fault', async () => {
+  await serve(async (baseURL, requests) => {
+    assert.equal((await createTally({ baseURL }, 'secret-token').execute({ action: 'status' })).output.ok, true)
+    assert.equal(requests.at(-1)?.authorization, 'Bearer secret-token')
+    assert.equal((await createTally({ baseURL }, 'secret-token').execute({ action: 'refresh' })).output.ok, true)
+    assert(requests.slice(-2).every(request => request.authorization === 'Bearer secret-token'))
+  })
+  const unauthorized = { status: 401, data: { error: { code: 'unauthorized', message: 'Authentication required.', retryAt: null, blockingOperationId: null } } }
+  await serve(async baseURL => {
+    for (const token of [undefined, 'wrong']) {
+      const result = await createTally({ baseURL }, token).execute({ action: 'status' })
+      assert.equal(result.output.ok, false)
+      if (!result.output.ok) {
+        assert.equal(result.output.error.code, 'unauthorized')
+        assert.match(result.output.error.message, /TALLY_SERVE_TOKEN/)
+      }
+    }
+  }, () => unauthorized)
 })

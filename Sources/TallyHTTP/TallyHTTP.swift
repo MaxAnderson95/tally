@@ -6,13 +6,21 @@ public struct HTTPPolicy: Sendable {
     public var port: Int
     public var allowedHosts: Set<String>
     public var allowedOrigins: Set<String>
-    public init(port: Int, webOrigin: String? = nil) {
-        self.port = port
+    /// The Host of the configured HTTPS web origin, the only Host Tally treats as HTTPS.
+    public var httpsAuthority: String?
+    /// Browser sign-in password; empty disables password and passkey bootstrap.
+    public var password: String
+    /// Bearer token for non-browser clients; empty disables bearer authentication.
+    public var token: String
+    public init(port: Int, webOrigin: String? = nil, password: String = "", token: String = "") {
+        self.port = port; self.password = password; self.token = token
         allowedHosts = ["127.0.0.1:\(port)", "localhost:\(port)"]
         allowedOrigins = ["http://127.0.0.1:\(port)", "http://localhost:\(port)"]
         if let webOrigin, let url = URL(string: webOrigin), let host = url.host {
-            allowedHosts.insert(host.lowercased() + (url.port.map { ":\($0)" } ?? ""))
+            let authority = host.lowercased() + (url.port.map { ":\($0)" } ?? "")
+            allowedHosts.insert(authority)
             allowedOrigins.insert(webOrigin.lowercased())
+            httpsAuthority = authority
         }
     }
 }
@@ -21,10 +29,13 @@ public struct TallyResponder: HTTPResponder {
     public typealias Context = BasicRequestContext
     let owner: TallyOwner
     let policy: HTTPPolicy
+    let auth: HTTPAuth
     let assets: [String: Data]
 
-    public init(owner: TallyOwner, policy: HTTPPolicy, assetDirectory: URL) throws {
+    /// Throws `auth_unconfigured` when the policy has neither a password nor a token: Tally never serves unauthenticated.
+    public init(owner: TallyOwner, policy: HTTPPolicy, assetDirectory: URL, authStateURL: URL) throws {
         self.owner = owner; self.policy = policy
+        auth = try HTTPAuth(policy: policy, stateURL: authStateURL)
         let assetDirectory = assetDirectory.resolvingSymlinksInPath().standardizedFileURL
         var assets: [String: Data] = [:]
         guard let enumerator = FileManager.default.enumerator(at: assetDirectory, includingPropertiesForKeys: [.isRegularFileKey]) else {
@@ -70,6 +81,8 @@ public struct TallyResponder: HTTPResponder {
             return Response(status: .ok, headers: [.contentType: type, .cacheControl: "no-store"], body: request.method == .head ? .init() : .init(byteBuffer: .init(bytes: data)))
         }
         do {
+            if path.hasPrefix("/api/v1/auth/") { return try await auth.respond(to: request, path: path) }
+            if let rejected = auth.reject(request) { return rejected }
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
             if parts.count == 6, parts[1] == "api", parts[2] == "v1", parts[3] == "accounts", !parts[4].isEmpty, parts[5] == "activate" {
                 guard request.method == .post else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use POST to activate an Account.")) }
@@ -190,18 +203,19 @@ public struct TallyResponder: HTTPResponder {
             return failure(.badRequest, Fault("invalid_request", "Request could not be processed."))
         }
     }
-
-    private func json<T: Encodable>(_ value: T, status: HTTPResponse.Status = .ok) throws -> Response {
-        Response(status: status, headers: [.contentType: "application/json", .cacheControl: "no-store"],
-                 body: .init(byteBuffer: .init(bytes: try Wire.encoder().encode(value))))
-    }
-    private func failure(_ status: HTTPResponse.Status, _ fault: Fault) -> Response {
-        struct Envelope: Encodable { var error: Fault }
-        return try! json(Envelope(error: fault), status: status)
-    }
 }
 
-public func makeHTTPApplication(owner: TallyOwner, policy: HTTPPolicy, assetDirectory: URL) throws -> Application<TallyResponder> {
-    try Application(responder: TallyResponder(owner: owner, policy: policy, assetDirectory: assetDirectory),
+func json<T: Encodable>(_ value: T, status: HTTPResponse.Status = .ok) throws -> Response {
+    Response(status: status, headers: [.contentType: "application/json", .cacheControl: "no-store"],
+             body: .init(byteBuffer: .init(bytes: try Wire.encoder().encode(value))))
+}
+
+func failure(_ status: HTTPResponse.Status, _ fault: Fault) -> Response {
+    struct Envelope: Encodable { var error: Fault }
+    return try! json(Envelope(error: fault), status: status)
+}
+
+public func makeHTTPApplication(owner: TallyOwner, policy: HTTPPolicy, assetDirectory: URL, authStateURL: URL) throws -> Application<TallyResponder> {
+    try Application(responder: TallyResponder(owner: owner, policy: policy, assetDirectory: assetDirectory, authStateURL: authStateURL),
                     configuration: .init(address: .hostname("127.0.0.1", port: policy.port), serverName: "Tally"))
 }
