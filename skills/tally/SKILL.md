@@ -18,8 +18,12 @@ It reads active and inactive supported subscription Accounts from the local Open
    set -o pipefail
    tally_port=$(defaults read net.maxanderson.tally port 2>/dev/null) || tally_port=7483
    tally_url="http://127.0.0.1:$tally_port"
-   curl --fail-with-body --silent --show-error --max-time 10 "$tally_url/api/v1/status" | jq .
+   # The bearer header goes through stdin so the token never appears in curl's process arguments.
+   tally_curl() { printf 'header = "Authorization: Bearer %s"\n' "$TALLY_SERVE_TOKEN" | curl --config - --fail-with-body --silent --show-error --max-time 10 "$@"; }
+   tally_curl "$tally_url/api/v1/status" | jq .
    ```
+
+   Every request, loopback included, needs the API token from Tally Settings in `TALLY_SERVE_TOKEN` (Max keeps it in `~/.env_private`, which his shell loads). If the variable is empty, ask Max for it instead of reading the Keychain. A 401 `unauthorized` means the token is missing or does not match Tally Settings. If Tally's popover says to set a web password or API token, it has neither and serves nothing until Max sets one.
 
    A valid status response confirms HTTP is reachable. Check `apiMajor` is `1`, then inspect `owner` and `inventory` for readiness, freshness, and errors. A running process alone does not prove the API or provider collection works.
 3. If installed but stopped, open the discovered app, then retry status:
@@ -71,12 +75,12 @@ Use the API for usage queries instead of reading credential tables or editing ca
 
 ## Query subscription usage through the API
 
-Use `tally_url` from the status check above. Local clients need no bearer token. A preconfigured personal-tailnet HTTPS URL can be used instead when querying remotely. Tally must allow that exact external origin/Host in Settings; tailnet setup is a separate task. This API has no additional authentication and must stay on loopback or the trusted personal tailnet.
+Use `tally_url` and `tally_curl` from the status check above. A preconfigured HTTPS tunnel URL (OpenTunnel or Tailscale) can replace `tally_url` when querying remotely; Tally must allow that exact external origin/Host in Settings, and tunnel setup is a separate task. The same bearer token works on every origin.
 
 ### Accounts and quota windows
 
 ```sh
-curl --fail-with-body --silent --show-error --max-time 10 "$tally_url/api/v1/accounts" |
+tally_curl "$tally_url/api/v1/accounts" |
   jq '{status, accounts: [.accounts[] | {id, provider, name, groups}]}'
 ```
 
@@ -84,7 +88,7 @@ The response contains `{status, accounts}`. All Accounts are included regardless
 
 ```sh
 # Set account_id to an ID returned by the Accounts endpoint.
-curl --fail-with-body --silent --show-error --max-time 10 "$tally_url/api/v1/accounts/$account_id" | jq .
+tally_curl "$tally_url/api/v1/accounts/$account_id" | jq .
 ```
 
 Detail returns `{status, account}`. Each Account has `groups.plan`, `quotas`, `extraUsage`, `balances`, `resetSummary`, and `resetDetails`. Each group carries `data`, `observedAt`, `lastAttemptAt`, `stale`, `refreshing`, `nextAttemptAt`, and `error`.
@@ -96,8 +100,7 @@ Report Account/provider, window label, `usedPercent`, `remainingPercent`, and `r
 GET requests only read cached state. Automatic collection runs on launch, wake, and every two minutes. If the user requests fresh readings or cached data is stale, schedule a refresh:
 
 ```sh
-curl --fail-with-body --silent --show-error --max-time 10 \
-  -H 'Content-Type: application/json' --data '{}' \
+tally_curl -H 'Content-Type: application/json' --data '{}' \
   "$tally_url/api/v1/refresh" | jq .
 ```
 
@@ -108,8 +111,7 @@ curl --fail-with-body --silent --show-error --max-time 10 \
 For local OpenCode activity, use:
 
 ```sh
-curl --fail-with-body --silent --show-error --max-time 10 \
-  "$tally_url/api/v1/activity?range=today" | jq .
+tally_curl "$tally_url/api/v1/activity?range=today" | jq .
 ```
 
 Valid ranges are `today` (default), `yesterday`, and `last30days`. The response contains `{status, activity}` with the same group freshness/error envelope. Activity belongs to recorded providers/models in the selected database and includes token components, recorded cost, API-equivalent estimates, and 30 calendar trend buckets. It is not necessarily attributable to current Accounts.

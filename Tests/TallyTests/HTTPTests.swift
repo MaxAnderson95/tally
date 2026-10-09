@@ -3,6 +3,7 @@ import Testing
 import Hummingbird
 import HummingbirdTesting
 import HTTPTypes
+import CryptoKit
 @testable import TallyCore
 import TallyHTTP
 @testable import TallyApp
@@ -10,15 +11,21 @@ import TallyHTTP
 private let testAuthority = HTTPField.Name("X-Test-Authority")!
 
 // Hummingbird's router tester fixes authority to localhost. Supply the requested authority at its test seam.
+// Route tests authenticate with the bearer token unless they bring their own credentials or clear `bearer`.
 private struct AuthorityResponder: HTTPResponder {
     typealias Context = BasicRequestContext
     let next: TallyResponder
+    var bearer: String? = testToken
     func respond(to request: Request, context: Context) async throws -> Response {
         var head = request.head
         head.authority = request.headers[testAuthority]
+        if let bearer, head.headerFields[.authorization] == nil, head.headerFields[.cookie] == nil { head.headerFields[.authorization] = "Bearer " + bearer }
         return try await next.respond(to: Request(head: head, body: request.body), context: context)
     }
 }
+
+private let testToken = "test-token"
+private func authState(_ directory: URL) -> URL { directory.appendingPathExtension("auth.json") }
 
 @Test func warmupWebSettingsShareOwnerAndEnforceEligibility() async throws {
     let now = Date()
@@ -35,9 +42,9 @@ private struct AuthorityResponder: HTTPResponder {
     let weekly = try #require(accounts.first(where: { $0.provider == "xai" }))
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("<html>Tally fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
-    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))))
     try await app.test(.router) { client in
         let headers: HTTPFields = [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]
         try await client.execute(uri: "/api/v1/warmups", method: .get, headers: headers) { response in
@@ -83,11 +90,11 @@ private struct AuthorityResponder: HTTPResponder {
     try await owner.setPins(pins)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("<html>Tally fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
     let iconTypes = ["manifest.webmanifest": "application/manifest+json", "icon-192.png": "image/png", "favicon.ico": "image/x-icon", "favicon.svg": "image/svg+xml"]
     for name in iconTypes.keys { try Data(name.utf8).write(to: directory.appendingPathComponent(name)) }
-    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, webOrigin: "https://Tally.Tail1234.ts.net"), assetDirectory: directory)))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, webOrigin: "https://Tally.Tail1234.ts.net", token: testToken), assetDirectory: directory, authStateURL: authState(directory))))
     try await app.test(.router) { client in
         for (name, type) in iconTypes {
             try await client.execute(uri: "/\(name)", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
@@ -216,9 +223,9 @@ private struct AuthorityResponder: HTTPResponder {
     let target = try #require(await owner.snapshot().accounts.first(where: { $0.name == "b" }))
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("<html>Fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
-    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))))
     try await app.test(.router) { client in
         let path = "/api/v1/accounts/\(target.id)/activate"
         let headers: HTTPFields = [testAuthority: "127.0.0.1:7483", .contentType: "application/json"]
@@ -241,9 +248,9 @@ private struct AuthorityResponder: HTTPResponder {
     let owner = TallyOwner(clock: { Date() }, inventory: { InventoryRead(databaseIdentity: "test-db", credentials: []) }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("Tally".utf8).write(to: directory.appendingPathComponent("index.html"))
-    let responder = try TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)
+    let responder = try TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))
     let (ports, ready) = AsyncStream<Int>.makeStream()
     let first = Application(responder: responder, configuration: .init(address: .hostname("127.0.0.1", port: 0)), onServerRunning: { channel in
         if let port = channel.localAddress?.port { ready.yield(port); ready.finish() }
@@ -254,7 +261,12 @@ private struct AuthorityResponder: HTTPResponder {
     let settings = try #require(UserDefaults(suiteName: suite))
     defer { settings.removePersistentDomain(forName: suite) }
     settings.set(port, forKey: "port")
-    let runtime = Runtime(owner: owner, settings: settings, assetDirectory: directory)
+    var secrets: [String: String] = [:]
+    let runtime = Runtime(owner: owner, settings: settings, assetDirectory: directory,
+                          secrets: ServeSecrets(read: { secrets[$0] ?? "" }, write: { secrets[$0] = $1 }), authStateURL: authState(directory))
+    runtime.startServer()
+    #expect(runtime.listenerError == "Set a web password or API token in Tally Settings to serve the web UI and API.")
+    runtime.apiToken = testToken
     runtime.startServer()
     for _ in 0..<100 where runtime.listenerError == nil { try await Task.sleep(for: .milliseconds(20)) }
     #expect(runtime.listenerError != nil)
@@ -262,8 +274,9 @@ private struct AuthorityResponder: HTTPResponder {
     runtime.webOrigin = "http://bad.example/path"
     await runtime.saveSettings()
     #expect(settings.string(forKey: "webOrigin") == nil)
+    #expect(secrets.isEmpty)
     runtime.webOrigin = ""
-    let collision = try makeHTTPApplication(owner: owner, policy: HTTPPolicy(port: port), assetDirectory: directory)
+    let collision = try makeHTTPApplication(owner: owner, policy: HTTPPolicy(port: port, token: testToken), assetDirectory: directory, authStateURL: authState(directory))
     do {
         try await collision.run()
         Issue.record("A listener collision must fail rather than select a new port.")
@@ -273,12 +286,16 @@ private struct AuthorityResponder: HTTPResponder {
     _ = await firstTask.result
     runtime.startServer()
     let url = URL(string: "http://127.0.0.1:\(port)/api/v1/status")!
+    var authorized = URLRequest(url: url)
+    authorized.setValue("Bearer " + testToken, forHTTPHeaderField: "Authorization")
     var reachable = false
     for _ in 0..<100 {
-        if let (_, response) = try? await URLSession.shared.data(from: url), (response as? HTTPURLResponse)?.statusCode == 200 { reachable = true; break }
+        if let (_, response) = try? await URLSession.shared.data(for: authorized), (response as? HTTPURLResponse)?.statusCode == 200 { reachable = true; break }
         try await Task.sleep(for: .milliseconds(20))
     }
     #expect(reachable)
+    let (_, anonymous) = try await URLSession.shared.data(from: url)
+    #expect((anonymous as? HTTPURLResponse)?.statusCode == 401)
     #expect(runtime.listenerError == nil)
     await runtime.stop()
     #expect(await owner.snapshot().status.owner == "shutting_down")
@@ -314,9 +331,9 @@ private struct AuthorityResponder: HTTPResponder {
     let native = await owner.snapshot()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("Tally".utf8).write(to: directory.appendingPathComponent("index.html"))
-    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))))
     try await app.test(.router) { client in
         try await client.execute(uri: "/api/v1/accounts", method: .get, headers: [testAuthority: "127.0.0.1:7483"]) { response in
             let data = Data(response.body.readableBytesView)
@@ -353,9 +370,9 @@ private struct AuthorityResponder: HTTPResponder {
     let account = try await resetAccount(owner)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
     try Data("Tally".utf8).write(to: directory.appendingPathComponent("index.html"))
-    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory)))
+    let app = try Application(responder: AuthorityResponder(next: TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))))
     let id = UUID().uuidString
     let submit = "/api/v1/accounts/\(account)/redemptions"
     let resultURL = "/api/v1/redemptions/\(id)"
@@ -417,4 +434,181 @@ private struct AuthorityResponder: HTTPResponder {
         try await client.execute(uri: submit, method: .post, headers: headers, body: .init(string: "{\"operationId\":\"\(UUID().uuidString)\"}")) { response in #expect(response.status == .serviceUnavailable) }
     }
     #expect(scenario.calls().map(\.httpMethod) == ["GET", "POST"])
+}
+
+/// A software passkey authenticator: "none" attestation and ES256 assertions, encoded the way browsers hand them to SimpleWebAuthn.
+private struct SoftAuthenticator {
+    let key = P256.Signing.PrivateKey()
+    let credentialID = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+    var counter: UInt32 = 0
+
+    static func b64url(_ data: Data) -> String {
+        data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+    static func bytes(_ b64url: String) -> Data {
+        var text = b64url.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        text += String(repeating: "=", count: (4 - text.count % 4) % 4)
+        return Data(base64Encoded: text)!
+    }
+    private static func cborBytes(_ data: Data, major: UInt8 = 0x40) -> Data {
+        precondition(data.count < 65_536)
+        if data.count < 24 { return Data([major | UInt8(data.count)]) + data }
+        if data.count < 256 { return Data([major | 24, UInt8(data.count)]) + data }
+        return Data([major | 25, UInt8(data.count >> 8), UInt8(data.count & 0xff)]) + data
+    }
+    private static func cborText(_ text: String) -> Data { cborBytes(Data(text.utf8), major: 0x60) }
+
+    private func authenticatorData(rpID: String, attested: Bool) -> Data {
+        var data = Data(SHA256.hash(data: Data(rpID.utf8)))
+        data.append(attested ? 0x45 : 0x05)
+        data.append(contentsOf: withUnsafeBytes(of: counter.bigEndian, Array.init))
+        guard attested else { return data }
+        let point = key.publicKey.x963Representation
+        data.append(Data(count: 16))
+        data.append(contentsOf: [UInt8(credentialID.count >> 8), UInt8(credentialID.count & 0xff)])
+        data.append(credentialID)
+        data.append(Data([0xA5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21]) + Self.cborBytes(point[1..<33]) + Data([0x22]) + Self.cborBytes(point[33..<65]))
+        return data
+    }
+
+    private func clientData(_ type: String, _ options: [String: Any], origin: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["type": type, "challenge": options["challenge"] as! String, "origin": origin])
+    }
+
+    func registration(_ options: [String: Any], origin: String) -> [String: Any] {
+        let rpID = (options["rp"] as! [String: Any])["id"] as! String
+        let attestation = Data([0xA3]) + Self.cborText("fmt") + Self.cborText("none") + Self.cborText("attStmt") + Data([0xA0])
+            + Self.cborText("authData") + Self.cborBytes(authenticatorData(rpID: rpID, attested: true))
+        let id = Self.b64url(credentialID)
+        return ["id": id, "rawId": id, "type": "public-key",
+                "response": ["clientDataJSON": Self.b64url(clientData("webauthn.create", options, origin: origin)), "attestationObject": Self.b64url(attestation)]]
+    }
+
+    /// Signs for `origin` and its host as RP ID, as an authenticator bound to that origin would.
+    mutating func assertion(_ options: [String: Any], origin: String) throws -> [String: Any] {
+        counter += 1
+        let authData = authenticatorData(rpID: URL(string: origin)!.host!, attested: false)
+        let client = clientData("webauthn.get", options, origin: origin)
+        let signature = try key.signature(for: authData + Data(SHA256.hash(data: client))).derRepresentation
+        let id = Self.b64url(credentialID)
+        return ["id": id, "rawId": id, "type": "public-key",
+                "response": ["clientDataJSON": Self.b64url(client), "authenticatorData": Self.b64url(authData), "signature": Self.b64url(signature)]]
+    }
+}
+
+private func object(_ response: TestResponse) throws -> [String: Any] {
+    try #require(JSONSerialization.jsonObject(with: Data(response.body.readableBytesView)) as? [String: Any])
+}
+private func jsonBody(_ value: [String: Any]) throws -> ByteBuffer { ByteBuffer(bytes: try JSONSerialization.data(withJSONObject: value)) }
+private func sessionCookie(_ response: TestResponse) -> String? {
+    response.headers[values: .setCookie].first { $0.hasPrefix("tally_session=") }.map { String($0.split(separator: ";")[0]) }
+}
+private func with(_ fields: HTTPFields, _ extra: HTTPFields) -> HTTPFields { var fields = fields; fields.append(contentsOf: extra); return fields }
+
+@Test func authenticationGuardsEveryRouteAndSupportsPasswordPasskeysAndBearer() async throws {
+    let owner = TallyOwner(clock: { Date() }, inventory: { InventoryRead(databaseIdentity: "auth-db", credentials: []) }, collect: { _ in throw Fault("unexpected", "No collection expected.") })
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: authState(directory)) }
+    try Data("<html>Tally fixture</html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+    let tunnel = "tally.abc123.opentunnel.xyz"
+    let policy = HTTPPolicy(port: 7483, webOrigin: "https://\(tunnel)", password: "hunter2", token: testToken)
+    let responder = try TallyResponder(owner: owner, policy: policy, assetDirectory: directory, authStateURL: authState(directory))
+    let attributes = try FileManager.default.attributesOfItem(atPath: authState(directory).path)
+    #expect((attributes[.posixPermissions] as? Int) == 0o600)
+    #expect(throws: Fault.self) { try TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483), assetDirectory: directory, authStateURL: authState(directory)) }
+
+    let local: HTTPFields = [testAuthority: "localhost:7483", .contentType: "application/json"]
+    let localPage = with(local, [.origin: "http://localhost:7483"])
+    let tunnelPage: HTTPFields = [testAuthority: tunnel, .contentType: "application/json", .origin: "https://\(tunnel)"]
+    let password = ByteBuffer(string: "{\"password\":\"hunter2\"}")
+    let empty = ByteBuffer(string: "{}")
+
+    try await Application(responder: AuthorityResponder(next: responder, bearer: nil)).test(.router) { client in
+        #expect(try await client.execute(uri: "/", method: .get, headers: local).status == .ok)
+        for path in ["/api/v1/status", "/api/v1/accounts", "/api/v1/activity", "/api/v1/warmups", "/api/v1/auth/passkeys", "/api/v1/auth/me"] {
+            #expect(try await client.execute(uri: path, method: .get, headers: local).status == .unauthorized)
+        }
+        #expect(try await client.execute(uri: "/api/v1/refresh", method: .post, headers: local, body: empty).status == .unauthorized)
+        let state = try object(try await client.execute(uri: "/api/v1/auth/state", method: .get, headers: local))
+        #expect(state["passwordEnabled"] as? Bool == true && state["hasPasskeys"] as? Bool == false)
+
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.authorization: "Bearer wrong"])).status == .unauthorized)
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.authorization: "Bearer " + testToken])).status == .ok)
+        #expect(try await client.execute(uri: "/api/v1/refresh", method: .post, headers: with(local, [.authorization: "Bearer " + testToken]), body: empty).status == .ok)
+
+        let wrong = try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: local, body: ByteBuffer(string: "{\"password\":\"wrong\"}"))
+        #expect(wrong.status == .unauthorized && sessionCookie(wrong) == nil)
+        #expect(try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: with(local, [.origin: "http://127.0.0.1:7483"]), body: password).status == .forbidden)
+        let login = try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: localPage, body: password)
+        #expect(login.status == .ok)
+        let header = try #require(login.headers[values: .setCookie].first)
+        #expect(header.contains("HttpOnly") && header.contains("SameSite=Strict") && header.contains("Max-Age=2592000") && !header.contains("Secure"))
+        let cookie = try #require(sessionCookie(login))
+        let secure = try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: tunnelPage, body: password)
+        #expect(secure.headers[values: .setCookie].first?.contains("Secure") == true)
+
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.cookie: cookie])).status == .ok)
+        #expect(try object(try await client.execute(uri: "/api/v1/auth/me", method: .get, headers: with(local, [.cookie: cookie])))["method"] as? String == "cookie")
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.cookie: cookie + "x"])).status == .unauthorized)
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.cookie: cookie, .authorization: "Bearer wrong"])).status == .unauthorized)
+        let crossSite = try await client.execute(uri: "/api/v1/refresh", method: .post, headers: with(local, [.cookie: cookie]), body: empty)
+        #expect(crossSite.status == .forbidden && String(buffer: crossSite.body).contains("cross_origin"))
+        #expect(try await client.execute(uri: "/api/v1/refresh", method: .post, headers: with(local, [.cookie: cookie, HTTPField.Name("Sec-Fetch-Site")!: "same-origin"]), body: empty).status == .ok)
+        #expect(try await client.execute(uri: "/api/v1/refresh", method: .post, headers: with(localPage, [.cookie: cookie]), body: empty).status == .ok)
+
+        // Passkeys are origin-bound: an assertion made for localhost cannot sign in through the tunnel, and vice versa.
+        var authenticators: [String: SoftAuthenticator] = [:]
+        for (headers, origin) in [(localPage, "http://localhost:7483"), (tunnelPage, "https://\(tunnel)")] {
+            #expect(try await client.execute(uri: "/api/v1/auth/passkeys/register/begin", method: .post, headers: headers, body: empty).status == .unauthorized)
+            let begin = try object(try await client.execute(uri: "/api/v1/auth/passkeys/register/begin", method: .post, headers: with(headers, [.cookie: cookie]), body: empty))
+            let options = try #require(begin["options"] as? [String: Any])
+            #expect((options["rp"] as? [String: Any])?["id"] as? String == URL(string: origin)?.host)
+            #expect((options["excludeCredentials"] as? [Any])?.count == authenticators.count)
+            let authenticator = SoftAuthenticator()
+            let finish = try jsonBody(["ceremonyId": try #require(begin["ceremonyId"] as? String), "name": "Phone", "credential": authenticator.registration(options, origin: origin)])
+            #expect(try await client.execute(uri: "/api/v1/auth/passkeys/register/finish", method: .post, headers: with(headers, [.cookie: cookie]), body: finish).status == .ok)
+            let replay = try await client.execute(uri: "/api/v1/auth/passkeys/register/finish", method: .post, headers: with(headers, [.cookie: cookie]), body: finish)
+            #expect(replay.status == .badRequest && String(buffer: replay.body).contains("ceremony_expired"))
+            authenticators[origin] = authenticator
+        }
+        for (headers, origin, other) in [(localPage, "http://localhost:7483", "https://\(tunnel)"), (tunnelPage, "https://\(tunnel)", "http://localhost:7483")] {
+            for (signer, expected) in [(other, HTTPResponse.Status.unauthorized), (origin, .ok)] {
+                let begin = try object(try await client.execute(uri: "/api/v1/auth/passkeys/login/begin", method: .post, headers: headers, body: empty))
+                var authenticator = try #require(authenticators[signer])
+                let assertion = try authenticator.assertion(try #require(begin["options"] as? [String: Any]), origin: signer)
+                authenticators[signer] = authenticator
+                let finish = try await client.execute(uri: "/api/v1/auth/passkeys/login/finish", method: .post, headers: headers,
+                                                      body: try jsonBody(["ceremonyId": try #require(begin["ceremonyId"] as? String), "credential": assertion]))
+                #expect(finish.status == expected)
+                #expect((sessionCookie(finish) != nil) == (expected == .ok))
+            }
+        }
+
+        let passkeys = try #require(try object(try await client.execute(uri: "/api/v1/auth/passkeys", method: .get, headers: with(local, [.cookie: cookie])))["passkeys"] as? [[String: Any]])
+        #expect(passkeys.count == 2)
+        #expect(passkeys.allSatisfy { $0["name"] as? String == "Phone" && $0["lastUsedAt"] is String })
+        let id = try #require(passkeys.first?["id"] as? String)
+        #expect(try await client.execute(uri: "/api/v1/auth/passkeys/\(id)", method: .delete, headers: with(local, [.cookie: cookie]), body: empty).status == .forbidden)
+        #expect(try await client.execute(uri: "/api/v1/auth/passkeys/\(id)", method: .delete, headers: with(localPage, [.cookie: cookie]), body: empty).status == .ok)
+        #expect(try await client.execute(uri: "/api/v1/auth/passkeys/\(id)", method: .delete, headers: with(localPage, [.cookie: cookie]), body: empty).status == .notFound)
+
+        #expect(try await client.execute(uri: "/api/v1/auth/logout", method: .post, headers: with(local, [.origin: "https://evil.example"]), body: empty).status == .forbidden)
+        let logout = try await client.execute(uri: "/api/v1/auth/logout", method: .post, headers: localPage, body: empty)
+        #expect(logout.status == .ok && logout.headers[values: .setCookie].first?.contains("Max-Age=0") == true)
+    }
+
+    // Sessions are signed with the persisted key, so a restarted server, here token-only, still accepts them.
+    let cookie = try await Application(responder: AuthorityResponder(next: responder, bearer: nil)).test(.router) { client in
+        try #require(sessionCookie(try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: localPage, body: password)))
+    }
+    let tokenOnly = try TallyResponder(owner: owner, policy: HTTPPolicy(port: 7483, token: testToken), assetDirectory: directory, authStateURL: authState(directory))
+    try await Application(responder: AuthorityResponder(next: tokenOnly, bearer: nil)).test(.router) { client in
+        #expect(try await client.execute(uri: "/api/v1/status", method: .get, headers: with(local, [.cookie: cookie])).status == .ok)
+        let state = try object(try await client.execute(uri: "/api/v1/auth/state", method: .get, headers: local))
+        #expect(state["passwordEnabled"] as? Bool == false && state["hasPasskeys"] as? Bool == true)
+        let login = try await client.execute(uri: "/api/v1/auth/login", method: .post, headers: localPage, body: password)
+        #expect(login.status == .forbidden && String(buffer: login.body).contains("password_disabled"))
+    }
+    await owner.shutdown()
 }

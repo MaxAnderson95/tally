@@ -5,7 +5,8 @@ import type { TallyInput, TallyResult } from './contract.ts'
 export const defaultBaseURL = 'http://127.0.0.1:7483'
 const Options = z.object({ baseURL: z.url().default(defaultBaseURL) })
 
-export function createTally(options: unknown = {}) {
+// Tally has no unauthenticated access, loopback included. OpenCode's service environment supplies the token, keeping it out of opencode.jsonc.
+export function createTally(options: unknown = {}, token = process.env.TALLY_SERVE_TOKEN) {
   const parsed = Options.safeParse(options)
   const base = parsed.success ? new URL(parsed.data.baseURL) : undefined
   const validBase = base && ['http:', 'https:'].includes(base.protocol) && !base.username && !base.password && !base.search && !base.hash && base.pathname === '/'
@@ -16,7 +17,8 @@ export function createTally(options: unknown = {}) {
     try {
       response = await fetch(new URL(`/api/v1${path}`, base), {
         method: body === undefined ? 'GET' : 'POST',
-        ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(15_000), redirect: 'error',
       })
     } catch {
@@ -25,6 +27,9 @@ export function createTally(options: unknown = {}) {
     let data: unknown
     try { data = await response.json() } catch {
       throw fault('invalid_response', 'Tally did not return JSON. Check the baseURL and update the app or companion if needed.')
+    }
+    if (response.status === 401) {
+      throw fault('unauthorized', token ? 'Tally rejected TALLY_SERVE_TOKEN. Match it to the API token in Tally Settings on the Mac.' : 'Set TALLY_SERVE_TOKEN in the OpenCode server environment to the API token from Tally Settings on the Mac.')
     }
     if (!response.ok) {
       const error = z.object({ error: Fault }).safeParse(data)

@@ -48,7 +48,7 @@ Anthropic extra usage, OpenAI purchased credits, and the banked reset count show
 
 Auto warm-up is off by default for every Account. Open the **Warm-up** tab in native Settings, turn on an eligible Account, and choose a model. Models load automatically; warming starts once a model is selected. Off accounts without an applicable five-hour window cannot be enabled and show an explanation. An existing enabled preference stays checked while waiting for quota information and can still be turned off. Menu bar pinning and ordering are in the **Menu bar** tab; startup and connection settings are in **General**. Tally schedules a short prompt after its five-hour window resets, with a random delay of up to 20 minutes and a rotating selection of 20 questions. If normal usage has already started the next window, Tally schedules after that window instead. Provider collection can add a small delay.
 
-Web and mobile Settings have the same **Warm-up** controls and **Menu bar** section. Model lists load automatically when opening Warm-up; preferences are shared with the Mac app and follow the stored OpenCode row across token rotation. Account cards show failed warm-up attempts, and Settings has a **Resume** button after resolving the cause. Schedule dates use the Mac's timezone and remain visible while quota information is unavailable. Launch at login, database location, listener settings, and quitting Tally are managed on the Mac.
+Web and mobile Settings have the same **Warm-up** controls and **Menu bar** section, plus a **Sign-in** section for passkeys and signing out. Model lists load automatically when opening Warm-up; preferences are shared with the Mac app and follow the stored OpenCode row across token rotation. Account cards show failed warm-up attempts, and Settings has a **Resume** button after resolving the cause. Schedule dates use the Mac's timezone and remain visible while quota information is unavailable. Launch at login, database location, listener settings, and quitting Tally are managed on the Mac.
 
 Tally sends HTTP requests directly to the selected provider using the selected Account's credentials. It creates no OpenCode sessions or processes and requires no executable or auth-plugin path. The model picker reads the provider's current model list.
 
@@ -60,13 +60,13 @@ Warm-up runs only while Tally is running and the Mac is awake. Missed windows do
 
 ## On your phone
 
-Tally serves the same interface at `http://127.0.0.1:7483`. To reach it from your phone, point a personal [Tailscale](https://tailscale.com) HTTPS proxy at that port, add the exact HTTPS origin under Settings, then open it in Safari and choose Share > Add to Home Screen.
+Tally serves the same interface at `http://127.0.0.1:7483` once you set a web password or API token in Settings on the Mac. To reach it from your phone, point an HTTPS tunnel such as [OpenTunnel](https://opentunnel.xyz) or a [Tailscale](https://tailscale.com) proxy at that port, add the exact HTTPS origin under Settings, then open it in Safari, sign in with the password, and choose Share > Add to Home Screen. Settings > Sign-in on the phone adds a passkey so later sign-ins use Face ID.
 
-The web app follows your phone's appearance and safe areas, and shows a reconnect screen when the Mac is unreachable. Tally does not configure Tailscale for you, and no tailnet exposure is needed for local use. Never put this API on the public internet.
+The web app follows your phone's appearance and safe areas, and shows a reconnect screen when the Mac is unreachable. Tally does not configure the tunnel for you, and none is needed for local use. Every page's data and every API call require sign-in or the API token, loopback included. See [docs/INSTALLATION.md](docs/INSTALLATION.md#authentication).
 
 ## For agents
 
-Tally has a REST API under `/api/v1` on the same port, covering status, accounts, activity, refresh, and reset redemptions. Local clients need no token; requests are limited to loopback and the one HTTPS origin you configure.
+Tally has a REST API under `/api/v1` on the same port, covering status, accounts, activity, refresh, and reset redemptions. Every request needs `Authorization: Bearer $TALLY_SERVE_TOKEN`, the API token from Tally Settings; requests are limited to loopback and the one HTTPS origin you configure.
 
 Give your coding agent the ability to check your usage:
 

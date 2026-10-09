@@ -1,5 +1,5 @@
 {
-  "originHash" : "8f7c3829cbfb691ef207007b42a94a8ce148681a9004c16e66c2ca46b7eb572b",
+  "originHash" : "4d43aec1c115f8946f63cdedce66b2e9d70536a75735ff283192db5a4f6955a3",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -214,6 +214,23 @@
       "state" : {
         "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
         "version" : "1.8.1"
+      }
+    },
+    {
+      "identity" : "swiftcbor",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/unrelentingtech/SwiftCBOR.git",
+      "state" : {
+        "revision" : "fd929a6d8f7651ce0f63fc99397fd5762358cc29",
+        "version" : "0.6.0"
+      }
+    },
+    {
+      "identity" : "webauthn-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swift-server/webauthn-swift.git",
+      "state" : {
+        "revision" : "909cf4193cde7d64196553c4245ab647a68aaaca"
       }
     }
   ],

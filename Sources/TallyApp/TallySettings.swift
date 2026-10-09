@@ -93,10 +93,12 @@ struct TallySettings: View {
         SettingsPanel(title: "OpenCode", footer: "Manage account names and sign-in in OpenCode.") {
             SettingsField(label: "Database", text: $runtime.databasePath).padding(14)
         }
-        SettingsPanel(title: "Web access", footer: "Your phone reaches Tally through this port. Add your Tailscale HTTPS origin to allow it.") {
+        SettingsPanel(title: "Web access", footer: "Your phone reaches Tally through this port. Add the HTTPS origin of your tunnel or proxy to allow it. The web UI and API stay off until a password or token is set.") {
             VStack(spacing: 12) {
                 SettingsField(label: "Port", text: $runtime.port)
                 SettingsField(label: "HTTPS origin", text: $runtime.webOrigin, prompt: "Optional")
+                SettingsField(label: "Password", text: $runtime.webPassword, prompt: "Browser sign-in", secure: true)
+                SettingsField(label: "API token", text: $runtime.apiToken, prompt: "Bearer token for scripts", secure: true)
             }.padding(14)
         }
         HStack {
@@ -133,14 +135,18 @@ private struct SettingsField: View {
     let label: String
     @Binding var text: String
     var prompt: String? = nil
+    var secure = false
     var body: some View {
         HStack(spacing: 12) {
             Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.dust).frame(width: 90, alignment: .leading)
-            TextField(label, text: $text, prompt: prompt.map { Text($0) })
-                .textFieldStyle(.plain).labelsHidden()
-                .padding(.horizontal, 10).frame(height: 30)
-                .background(Palette.raised, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
+            Group {
+                if secure { SecureField(label, text: $text, prompt: prompt.map { Text($0) }) }
+                else { TextField(label, text: $text, prompt: prompt.map { Text($0) }) }
+            }
+            .textFieldStyle(.plain).labelsHidden()
+            .padding(.horizontal, 10).frame(height: 30)
+            .background(Palette.raised, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
         }
     }
 }

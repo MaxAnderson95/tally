@@ -31,7 +31,7 @@ Decided by **Define Tally's single-app architecture, credential access, and life
 
 - One resident Swift app owns provider collection, scheduling, cached readings, activity derivation, commands, and recovery. Native UI calls the shared Swift module directly. Hummingbird exposes that module to HTTP clients. Clients do not read credentials, contact providers, calculate pricing, or coordinate redemptions.
 - Bundle a React/TypeScript/Vite SPA in the app resources. Serve `/` and real assets with Vite base `/`. Build tools and Node are required only on the build machine. `/api` and `/api/*` always dispatch to JSON API handling; unknown API routes and missing assets never return successful SPA HTML. Add restricted history fallback only if actual browser routes require it.
-- Bind HTTP to loopback on a saved, explicitly configured stable port. Never silently choose a new port on collision. An independently configured Tailscale proxy owns personal-tailnet HTTPS exposure. Setup documents the chosen port and proxy configuration; Tally does not manage Tailscale.
+- Bind HTTP to loopback on a saved, explicitly configured stable port. Never silently choose a new port on collision. An independently configured tunnel or proxy (OpenTunnel or Tailscale Serve) owns HTTPS exposure and forwards plain HTTP to loopback. Setup documents the chosen port and tunnel configuration; Tally does not manage either.
 - Enable launch at login during setup and allow disabling it. Closing the popover leaves all work running. Quit rejects new commands and waits at most 15 seconds for in-flight redemption. Crash recovery is manual. App lifetime, independently of views, owns the HTTP run task and awaits its shutdown.
 - A listener failure leaves native collection usable. Show web/API unavailability with retry and port settings. A retry creates a fresh server lifetime. Provider failures remain independent.
 - Distribute an unsigned personal app as downloadable releases. Max accepts manual macOS approval. Updates manually replace the app; no in-app updater, Developer ID signing, or notarization is required. Runtime and web assets ship together. A web tab reloads on an app-build change.
@@ -52,7 +52,7 @@ Namespace inventory identity by the selected database. Switching to a different 
 
 Initial setup remains pending through failed or empty inventory reads. On the first successful nonempty inventory, pin the whole batch in provider order Anthropic, OpenAI, OpenCode Go, xAI, then OpenCode name, then stable ID. Use deterministic case-insensitive name ordering with original name and ID tie-breakers. Assign identity colors in that same order within each provider. Later discovered Accounts start unpinned. Persist a provider-local assignment sequence, wrapping after six; removing another Account never changes an existing color. Restored recognized identities keep their saved association.
 
-The Mac app manages pin selection and order. Web reflects it and has no pin-setting mutation. All-unpinned and empty inventories retain a plain Tally menu bar glyph. Setup/settings also expose database path, launch at login, listener port, and allowed web origin/Host configuration. Account management and authentication direct the user to OpenCode.
+The Mac app manages pin selection and order. Web reflects it and has no pin-setting mutation. All-unpinned and empty inventories retain a plain Tally menu bar glyph. Setup/settings also expose database path, launch at login, listener port, allowed web origin/Host configuration, and the web password and API token (stored in the login Keychain). Account management and authentication direct the user to OpenCode.
 
 ## 4. Readings, collection, and recovery
 
@@ -217,7 +217,7 @@ Decided by **Define REST API and banked-reset redemption across clients**, the p
 
 Use `/api/v1`, RFC 3339 UTC instants, local `YYYY-MM-DD` dates for calendar labels, finite JSON numbers for percentages/counts, and decimal strings for money. Fields shown are required unless marked `?` in request types; unavailable values use null, not omitted successful-response fields. Strings that are IDs are opaque to clients. Arrays have deterministic ordering. Additive fields remain compatible; clients ignore unknown fields. Do not expose credentials, raw provider payloads, local database paths, or workspace identifiers.
 
-Trust loopback clients and clients admitted by Max's personal Tailscale policy; no separate login/bearer token. Validate allowed Host values and browser mutation Origin against the configured origin. Mutations are JSON-only and no permissive cross-origin access is exposed. Non-browser local clients may omit Origin. This authorizes trusted clients, not individual model intent.
+Every route except the SPA shell, static assets, and `/auth/*` sign-in routes requires a bearer token (`Authorization: Bearer <TALLY_SERVE_TOKEN>`) or a browser session cookie from password or passkey sign-in, including from loopback ([ADR 0002](adr/0002-app-level-http-auth.md)). Tally does not serve until a password or token is set. Validate allowed Host values and browser mutation Origin against the configured origin. Mutations are JSON-only and no permissive cross-origin access is exposed. Cookie-authenticated mutations also require a same-origin `Origin` or `Sec-Fetch-Site`; bearer clients may omit Origin. This authorizes clients, not individual model intent.
 
 ```ts
 type Instant = string
@@ -386,10 +386,18 @@ Reset summary prefers a successful dedicated detail observation when available; 
 | `POST /accounts/{accountId}/redemptions` | `{ operationId: string, creditId?: string }`; `Redemption`, 202 while pending, otherwise 200. `Location` matches `resultUrl`. UUID is required; omitted credit is automatic. |
 | `GET /redemptions/{operationId}` | `Redemption`, 200; reads never send provider mutations. |
 | `POST /redemptions/{operationId}/acknowledge` | `{}` body; updated `Redemption`, 200. Repeated acknowledgement of an already acknowledged unknown is idempotent. Other states conflict. |
+| `GET /auth/state` | `{ passwordEnabled: boolean, hasPasskeys: boolean }`, 200; no credentials needed. |
+| `GET /auth/me` | `{ authenticated: true, method: 'cookie' \| 'token' }`, 200; 401 when signed out. |
+| `POST /auth/login` | `{ password: string }`; `{ ok: true }` and a session cookie, 200. 401 `bad_password`; 403 `password_disabled` when only a token is set. |
+| `POST /auth/logout` | `{}`; clears the session cookie, 200. |
+| `POST /auth/passkeys/login/begin`, `POST /auth/passkeys/login/finish` | Begin returns `{ ceremonyId, options }` (WebAuthn request options JSON); finish takes `{ ceremonyId, credential }` and sets the session cookie. |
+| `GET /auth/passkeys` | Authenticated; `{ passkeys: { id, name, createdAt, lastUsedAt \| null }[] }`. |
+| `POST /auth/passkeys/register/begin`, `POST /auth/passkeys/register/finish` | Authenticated; begin returns `{ ceremonyId, options }` (WebAuthn creation options JSON with `excludeCredentials`); finish takes `{ ceremonyId, name?, credential }`. |
+| `DELETE /auth/passkeys/{id}` | Authenticated, `{}` JSON body; `{ ok: true }`, 200. |
 
 All route paths above are relative to `/api/v1`. GETs are cached reads and never trigger provider collection or activity scans. Owner-derived freshness, pacing, and pin selection may be recomputed from cached inputs and the clock. Accepted commands remain readable after Account removal.
 
-Errors use `{ error: Fault }`: 400 invalid shape/range/UUID; 403 rejected origin/Host; 404 unknown resource/route; 409 reused UUID with different request, Account block, or invalid acknowledgement; 503 owner cannot accept work, including shutdown or required recovery-storage failure. Use 405 for unsupported methods and 415 for a non-JSON mutation content type. Accepted-operation outcomes are represented by state rather than an HTTP success that implies a reset. Error codes describe the cause, such as `invalid_request`, `account_not_found`, `operation_conflict`, `account_blocked`, `inventory_unavailable`, `credentials_unavailable`, `provider_cooldown`, `recovery_storage_unavailable`, `provider_response_unknown`, and `shutting_down`. Sanitize provider errors.
+Errors use `{ error: Fault }`: 400 invalid shape/range/UUID or expired passkey ceremony; 401 missing or invalid credentials (`unauthorized`); 403 rejected origin/Host or cross-origin cookie mutation (`cross_origin`); 404 unknown resource/route; 409 reused UUID with different request, Account block, or invalid acknowledgement; 503 owner cannot accept work, including shutdown or required recovery-storage failure. Use 405 for unsupported methods and 415 for a non-JSON mutation content type. Accepted-operation outcomes are represented by state rather than an HTTP success that implies a reset. Error codes describe the cause, such as `invalid_request`, `account_not_found`, `operation_conflict`, `account_blocked`, `inventory_unavailable`, `credentials_unavailable`, `provider_cooldown`, `recovery_storage_unavailable`, `provider_response_unknown`, and `shutting_down`. Sanitize provider errors.
 
 ### Activity DTOs
 
@@ -497,7 +505,7 @@ Scalar has equal lower/upper; range has verified unequal bounds; partial has the
 
 Decided by **Verify OpenCode credential, model-tool, TUI, and context-injection capabilities**, the architecture/API resolutions, and consolidation review.
 
-Register one model tool named `tally` through OpenCode V2's tool registry. It has an action-discriminated input and returns a structured result containing the corresponding REST body. It does not add context hooks, HTTP interception, account attribution, or TUI surfaces. Configure the Tally base URL in the companion; default to the installed app's documented loopback address/port, and allow the independently configured tailnet URL for a remote companion. The tool sees this Mac's Tally inventory regardless of the invoking OpenCode instance.
+Register one model tool named `tally` through OpenCode V2's tool registry. It has an action-discriminated input and returns a structured result containing the corresponding REST body. It does not add context hooks, HTTP interception, account attribution, or TUI surfaces. Configure the Tally base URL in the companion; default to the installed app's documented loopback address/port, and allow the independently configured HTTPS tunnel URL for a remote companion. The companion sends `TALLY_SERVE_TOKEN` from its process environment as a bearer token. The tool sees this Mac's Tally inventory regardless of the invoking OpenCode instance.
 
 ```ts
 type TallyInput =
@@ -551,3 +559,4 @@ The implementation may choose internal file layout, storage engine, concrete err
 8. Go Monthly pacing does not adopt OpenUsage's fixed 30-day assumption. "Not started" requires the verified provider mapping and fresh explicit zero, rather than any missing reset timestamp.
 9. Unknown credit expiry sorts after confirmed nonexpiring credit for automatic selection and remains distinct in the contract. Applicability never becomes a client-side eligibility gate.
 10. Earlier research proposals for proactive context injection, TUI advisories, mixed Go/Zen activity, or retrying consume are superseded by the map's tool-only, Go-only, no-resend decisions. The pricing resolution accepts xAI's specific inclusive threshold rather than leaving its equality point unresolved.
+11. App-level authentication ([ADR 0002](adr/0002-app-level-http-auth.md)) replaces section 9's original trust of loopback and personal-tailnet clients with no login or bearer token.

@@ -6,12 +6,13 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [.executable(name: "Tally", targets: ["TallyApp"])],
     dependencies: [
-        .package(url: "https://github.com/hummingbird-project/hummingbird.git", revision: "80b4445a88503fc6c8062ec40631eb7f9d93b837")
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", revision: "80b4445a88503fc6c8062ec40631eb7f9d93b837"),
+        .package(url: "https://github.com/swift-server/webauthn-swift.git", revision: "909cf4193cde7d64196553c4245ab647a68aaaca")
     ],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .target(name: "TallyCore", dependencies: ["CSQLite"], resources: [.copy("Resources/pricing.json")]),
-        .target(name: "TallyHTTP", dependencies: ["TallyCore", .product(name: "Hummingbird", package: "hummingbird")]),
+        .target(name: "TallyHTTP", dependencies: ["TallyCore", .product(name: "Hummingbird", package: "hummingbird"), .product(name: "WebAuthn", package: "webauthn-swift")]),
         .executableTarget(name: "TallyApp", dependencies: ["TallyCore", "TallyHTTP"], resources: [.copy("Resources/logos.json"), .copy("Resources/tally-glyph.svg")]),
         .testTarget(name: "TallyTests", dependencies: ["TallyCore", "TallyHTTP", "TallyApp", "CSQLite", .product(name: "HummingbirdTesting", package: "hummingbird")], resources: [.copy("Fixtures")])
     ]

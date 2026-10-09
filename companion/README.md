@@ -41,7 +41,9 @@ The package contains compiled JavaScript and its Zod schema runtime; OpenCode's 
 
 The default baseURL is the app's loopback origin, `http://127.0.0.1:7483`. Set a different origin when Tally's saved stable port differs. Use an HTTP(S) origin with no path, query, fragment or embedded credentials; the companion appends `/api/v1`.
 
-For remote OpenCode, configure the existing personal-tailnet HTTPS proxy independently to forward to the Mac's loopback port, preserve its external Host, and set that exact HTTPS origin in Tally's allowed web-origin settings. Set the companion's `baseURL` to the same origin, for example `https://tally.example.ts.net`. The machine running the OpenCode server must be able to reach it under your Tailscale policy. There is no separate Tally bearer token. The companion sends no browser Origin header.
+Tally requires its API token on every request, loopback included. The companion reads `TALLY_SERVE_TOKEN` from the OpenCode server's process environment and sends it as `Authorization: Bearer`. Set it to the API token from Tally Settings in the environment the OpenCode service starts with (Max's keep-managed service loads `~/.env_private`), then restart OpenCode's service when work can be interrupted. Keep the token out of `opencode.jsonc`. A missing or mismatched token returns `unauthorized`.
+
+For remote OpenCode, configure an HTTPS tunnel or proxy (OpenTunnel or Tailscale Serve) independently to forward to the Mac's loopback port, preserve its external Host, and set that exact HTTPS origin in Tally's allowed web-origin settings. Set the companion's `baseURL` to the same origin, for example `https://tally.example.opentunnel.xyz`, and give the remote OpenCode server the same `TALLY_SERVE_TOKEN`. The companion sends no browser Origin header.
 
 Every invoking OpenCode instance sees the inventory and activity of **the Mac running Tally**, not the invoking instance's accounts or records. A remote loopback URL refers to the remote OpenCode server itself; it does not refer to your Mac.
 

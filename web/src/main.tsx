@@ -8,8 +8,9 @@ import { AccountPreferences, type PreferenceChange } from './AccountPreferences'
 import { PullToReload } from './PullToReload'
 import { Segmented, useDialogMotion } from './motion'
 import { useWarmups } from './WarmupPreferences'
+import { hasSession, Login } from './auth'
 
-function App() {
+function App({ signedOut }: { signedOut: () => void }) {
   const [data, setData] = useState<AccountsResponse>()
   const [error, setError] = useState<string>()
   const [refreshing, setRefreshing] = useState(false)
@@ -35,6 +36,8 @@ function App() {
       inFlight = true
       try {
         const response = await fetch('/api/v1/accounts', { cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) })
+        // The 30-day session expired or was revoked; every other request fails the same way, so this poll is the one place that signs out.
+        if (response.status === 401) { if (!stopped) signedOut(); return }
         if (!response.ok) throw new Error(`Tally connection failed (HTTP ${response.status}).`)
         const next = decodeAccounts(await response.text())
         if (build.current && build.current !== next.status.appBuild) { location.reload(); return }
@@ -140,7 +143,7 @@ function App() {
       {!data && !error && <p className="loading">Reading Tally…</p>}
     </div>
     <div className="view" hidden={view !== 'activity'}><RecordedActivity refresh={schedule} onObserved={setActivityObserved} accounts={data?.accounts ?? []} disconnected={!!error} /></div>
-    <AccountPreferences accounts={data?.accounts ?? []} timezone={timezone} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} warmups={warmups} />
+    <AccountPreferences accounts={data?.accounts ?? []} timezone={timezone} open={settingsOpen} close={() => setSettingsOpen(false)} save={savePreference} disabled={saving || !!error} error={preferenceError} warmups={warmups} signedOut={signedOut} />
     <dialog ref={refreshDialog} className="sheet small-sheet" aria-labelledby="refresh-title" onCancel={event => { event.preventDefault(); closeRefresh() }} onClick={event => { if (event.target === event.currentTarget) closeRefresh() }}>
       <form method="dialog" onSubmit={event => { event.preventDefault(); closeRefresh(); void refresh() }}>
         <h2 id="refresh-title">Ask providers for fresh usage?</h2>
@@ -155,7 +158,14 @@ function App() {
 document.documentElement.dataset.intro = ''
 setTimeout(() => { delete document.documentElement.dataset.intro }, 2000)
 
-createRoot(document.getElementById('root')!).render(<App />)
+function Root() {
+  const [session, setSession] = useState<boolean>()
+  useEffect(() => { void hasSession().then(setSession) }, [])
+  if (session === undefined) return null
+  return session ? <App signedOut={() => setSession(false)} /> : <Login signedIn={() => setSession(true)} />
+}
+
+createRoot(document.getElementById('root')!).render(<Root />)
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
