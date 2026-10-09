@@ -27,6 +27,6 @@ keep derives the WebAuthn origin scheme and the cookie `Secure` flag from `r.TLS
 ## Consequences
 
 - Passkeys are origin-bound. Changing the configured origin, for example a new OpenTunnel route, means signing in with the password and adding a new passkey.
-- Rotating the password or token does not end existing browser sessions. Deleting `serve-state.json` does, and also deletes every passkey.
+- Rotating the password or token does not end existing browser sessions. Quitting Tally, deleting `serve-state.json`, and relaunching does, and also deletes every passkey. Deleting it while Tally runs does not, because the running server holds the key and passkeys in memory and rewrites the file on the next passkey sign-in.
 - Tally is ad-hoc signed, and macOS ties a Keychain item's access list to the creating app's code signature. A rebuilt Tally can prompt once to read its own items; choose Always Allow.
 - Local processes running as Max can still read the Keychain item or the state file. App auth is a real gate for the tunnel and a speed bump locally.

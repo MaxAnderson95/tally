@@ -89,6 +89,13 @@ export function SignInPreferences({ signedOut }: { signedOut: () => void }) {
     catch (failure) { setError(message(failure, fallback)) }
     finally { setBusy(false) }
   }
+  // The HttpOnly cookie clears only when Tally answers, so a failed request must not look like a sign-out.
+  async function leave() {
+    setBusy(true); setError(undefined)
+    try { await signOut(); signedOut() }
+    catch (failure) { setError(`${message(failure, 'Sign-out failed.')} This browser is still signed in. Try again when Tally is reachable.`) }
+    finally { setBusy(false) }
+  }
   const add = (event: FormEvent) => {
     event.preventDefault()
     void run(async () => {
@@ -112,6 +119,6 @@ export function SignInPreferences({ signedOut }: { signedOut: () => void }) {
         <button type="submit" className="primary-button" disabled={busy}>Add passkey</button>
       </form>
       : <p className="fine-print">Passkeys need an HTTPS address or localhost, not an IP address.</p>}
-    <button className="quiet-button sign-out" disabled={busy} onClick={() => { void signOut().catch(() => undefined).finally(signedOut) }}>Sign out</button>
+    <button className="quiet-button sign-out" disabled={busy} onClick={() => void leave()}>Sign out</button>
   </div>
 }

@@ -36,7 +36,7 @@ The web UI and API stay off until Settings has a web password, an API token, or 
 - **Browser:** sign in with the password, then open Settings > Sign-in and add a passkey. Later sign-ins use Face ID or Touch ID. A passkey works only at the address it was added from: `http://localhost:<port>` or the configured HTTPS origin. `127.0.0.1` supports the password only. Sessions last 30 days and survive app restarts.
 - **Scripts and the companion:** send `Authorization: Bearer $TALLY_SERVE_TOKEN`.
 
-Sessions are signed with a key in `~/Library/Application Support/Tally/serve-state.json`, which also holds the passkeys. Changing the password or token does not sign browsers out. Delete that file to end every session; it also removes every passkey. Tally is ad-hoc signed, so a rebuilt app can ask once to read its Keychain items; choose Always Allow.
+Sessions are signed with a key in `~/Library/Application Support/Tally/serve-state.json`, which also holds the passkeys. Changing the password or token does not sign browsers out. To end every session, quit Tally, delete that file, then open Tally again; this also removes every passkey. A running Tally keeps the key and passkeys in memory and writes them back on the next passkey sign-in, so deleting the file while it runs revokes nothing. Tally is ad-hoc signed, so a rebuilt app can ask once to read its Keychain items; choose Always Allow.
 
 ## HTTPS access from other devices
 
