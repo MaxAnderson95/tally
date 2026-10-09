@@ -290,7 +290,7 @@ body:has(dialog[open]) { overflow: hidden; }
   /* iOS blurs the strip just below the status bar; start the masthead clear of it. */
   main { padding: calc(30px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(48px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
   .masthead { grid-template-columns: 1fr auto; grid-template-areas: "brand actions" "tabs tabs"; gap: 14px; margin-bottom: 30px; }
-  .wordmark { grid-area: brand; font-size: 18px; }
+  .masthead .wordmark { grid-area: brand; font-size: 18px; }
   .masthead-actions { grid-area: actions; gap: 6px; }
   .tabs { grid-area: tabs; }
   .tabs button { min-height: 36px; }

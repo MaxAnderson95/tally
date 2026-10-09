@@ -581,6 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var settingsWindow: NSWindow?
     private var outsideClickMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installEditMenu()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         pins = NSHostingView(rootView: MenuPins(runtime: runtime))
         pins.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(togglePopover)))
@@ -595,6 +596,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.animates = false
         popover.contentViewController = NSHostingController(rootView: Dashboard(runtime: runtime, showSettings: { [weak self] in self?.showSettings() }))
         runtime.start()
+    }
+    /// An accessory app shows no menu bar, but text fields still receive Cut, Copy, Paste, and Undo only as main-menu key equivalents.
+    private func installEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let item = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        item.submenu = edit
+        let menu = NSMenu()
+        menu.addItem(item)
+        NSApplication.shared.mainMenu = menu
     }
     private func showSettings() {
         popover.performClose(nil)
