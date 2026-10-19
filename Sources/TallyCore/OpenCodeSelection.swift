@@ -51,7 +51,7 @@ struct OpenCodeSelection: Sendable {
         }
         struct IntegrationResponse: Decodable { var data: Integration }
         do {
-            let (data, response) = try await send(request("api/integration/" + credential.provider))
+            let (data, response) = try await send(request("api/integration/" + (credential.integration ?? credential.provider)))
             guard response.statusCode == 200,
                   try JSONDecoder().decode(IntegrationResponse.self, from: data).data.connections.contains(where: { $0.id == credential.storedID }) else {
                 throw Fault("account_changed", "The Account is not available in the local OpenCode service. Refresh Accounts.")

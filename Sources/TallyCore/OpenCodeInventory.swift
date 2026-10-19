@@ -11,6 +11,8 @@ struct StoredCredential: Sendable {
     var workspace: String? = nil
     var expiresAt: Date? = nil
     var active = false
+    /// OpenCode stores Console OAuth sign-ins under the `opencode` integration, though they read Go usage.
+    var integration: String? = nil
 
     var fingerprint: String { identityDigest(key) }
     var preferenceKey: String { identityDigest("\(provider)\u{0}\(storedID)") }
@@ -84,7 +86,7 @@ public struct OpenCodeInventory: Sendable {
         sqlite3_busy_timeout(database, 1000)
         var statement: OpaquePointer?
         // Selecting required columns validates their presence while accepting additive schema changes.
-        let sql = "SELECT id, label, value, integration_id, time_created, id = (SELECT chosen.id FROM credential AS chosen WHERE chosen.integration_id = credential.integration_id ORDER BY chosen.active DESC, chosen.time_created DESC, chosen.id DESC LIMIT 1) FROM credential WHERE integration_id IN ('anthropic', 'openai', 'opencode-go', 'xai') ORDER BY time_created, id"
+        let sql = "SELECT id, label, value, integration_id, time_created, id = (SELECT chosen.id FROM credential AS chosen WHERE chosen.integration_id = credential.integration_id ORDER BY chosen.active DESC, chosen.time_created DESC, chosen.id DESC LIMIT 1) FROM credential WHERE integration_id IN ('anthropic', 'openai', 'opencode', 'opencode-go', 'xai') ORDER BY time_created, id"
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw Fault("inventory_schema_incompatible", "OpenCode's credential schema is not compatible with this Tally build.")
         }
@@ -108,18 +110,21 @@ public struct OpenCodeInventory: Sendable {
             }
             struct Kind: Decodable { var type: String }
             struct Method: Decodable { var methodID: String }
-            let provider = try text(3)
+            let integration = try text(3)
+            // A Console sign-in authorizes Go usage. Console API keys are excluded because they alias Zen keys.
+            let provider = integration == "opencode" ? "opencode-go" : integration
+            let usesKey = integration == "opencode-go"
             let data = Data(try text(2).utf8)
             let kind: Kind
             do { kind = try JSONDecoder().decode(Kind.self, from: data) }
             catch { throw Fault("inventory_schema_incompatible", "An OpenCode credential cannot be decoded.") }
-            guard kind.type == (provider == "opencode-go" ? "key" : "oauth") else { continue }
-            let methods = ["anthropic": ["claude-subscription"], "openai": ["chatgpt-browser", "chatgpt-headless"], "xai": ["device", "browser"]]
-            if provider != "opencode-go" {
+            guard kind.type == (usesKey ? "key" : "oauth") else { continue }
+            let methods = ["anthropic": ["claude-subscription"], "openai": ["chatgpt-browser", "chatgpt-headless"], "opencode": ["device"], "xai": ["device", "browser"]]
+            if !usesKey {
                 let method: String
                 do { method = try JSONDecoder().decode(Method.self, from: data).methodID }
                 catch { throw Fault("inventory_schema_incompatible", "An OAuth credential has no valid authentication method.") }
-                if !methods[provider, default: []].contains(method) { continue }
+                if !methods[integration, default: []].contains(method) { continue }
             }
             guard sqlite3_column_type(statement, 4) == SQLITE_INTEGER else {
                 throw Fault("inventory_schema_incompatible", "An OpenCode credential creation time is invalid.")
@@ -129,7 +134,7 @@ public struct OpenCodeInventory: Sendable {
             var workspace: String?
             var expiresAt: Date?
             do {
-                if provider == "opencode-go" {
+                if usesKey {
                     guard let key = try JSONDecoder().decode(KeyValue.self, from: data).key,
                           !key.isEmpty, !key.contains(where: { $0.isWhitespace }) else { continue }
                     secret = key
@@ -147,7 +152,7 @@ public struct OpenCodeInventory: Sendable {
             }
             let credential = StoredCredential(storedID: try text(0), name: try text(1), key: secret, provider: provider,
                                               refresh: refresh, workspace: workspace.flatMap { $0.isEmpty ? nil : $0 }, expiresAt: expiresAt,
-                                              active: sqlite3_column_int(statement, 5) == 1)
+                                              active: sqlite3_column_int(statement, 5) == 1, integration: integration)
             if let duplicate = credentials.firstIndex(where: { $0.evidence.relation(to: credential.evidence) == .same }) {
                 credentials[duplicate].active = credentials[duplicate].active || credential.active
             } else { credentials.append(credential) }
