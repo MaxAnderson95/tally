@@ -19,7 +19,7 @@ struct GoUsage: Sendable {
         guard http.statusCode == 200 else {
             var fault: Fault
             switch http.statusCode {
-            case 401: fault = Fault("credentials_rejected", "OpenCode Go rejected this key. Check the Account in OpenCode.")
+            case 401: fault = Fault("credentials_rejected", "OpenCode Go rejected this credential. Check the Account in OpenCode.")
             case 403: fault = Fault("entitlement_unavailable", "OpenCode Go entitlement could not be verified.")
             default: fault = Fault("provider_unavailable", "OpenCode Go usage request failed (HTTP \(http.statusCode)).")
             }

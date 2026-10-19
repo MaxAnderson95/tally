@@ -1001,17 +1001,22 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
     INSERT INTO credential VALUES ('j', 'anthropic', 'API', '{"type":"key","key":"api-key"}', 1, 10, NULL);
     INSERT INTO credential VALUES ('k', 'openai', 'Unsupported method', '{"type":"oauth","methodID":"other"}', 1, 11, NULL);
     INSERT INTO credential VALUES ('l', 'mcp', 'MCP', 'invalid', 1, 12, NULL);
+    INSERT INTO credential VALUES ('m', 'opencode', 'Console', '{"type":"oauth","methodID":"device","access":"console-a","refresh":"console-r","expires":0,"metadata":{"server":"https://opencode.ai/console","orgID":"org"}}', 0, 13, NULL);
+    INSERT INTO credential VALUES ('n', 'opencode', 'Console other method', '{"type":"oauth","methodID":"other","access":"x","refresh":"y","expires":0}', 0, 14, NULL);
     """
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let before = try Data(contentsOf: URL(fileURLWithPath: path))
     let credentials = try OpenCodeInventory(path: path).read().credentials
-    #expect(credentials.map(\.name) == ["Go Personal", "WORK", "Claude", "Workspace A", "Workspace B", "Grok"])
+    #expect(credentials.map(\.name) == ["Go Personal", "WORK", "Claude", "Workspace A", "Workspace B", "Grok", "Console"])
     #expect(credentials.prefix(2).map(\.key) == ["key-a", "key-b"])
     #expect(credentials[2].expiresAt == Date(timeIntervalSince1970: 0))
     #expect(credentials[0].expiresAt == nil)
+    // A Console sign-in reads Go usage, but OpenCode selects it through the Console integration.
+    #expect(credentials[6].provider == "opencode-go" && credentials[6].integration == "opencode" && credentials[6].key == "console-a")
+    #expect(credentials[0].integration == "opencode-go")
     // OpenCode ranks active, creation time, then ID across all methods, before Tally filters subscriptions.
-    #expect(credentials.map(\.active) == [true, false, false, false, false, true])
+    #expect(credentials.map(\.active) == [true, false, false, false, false, true, false])
     #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == before)
     #expect(throws: Fault.self) { try OpenCodeInventory(path: path + "-missing").read() }
     #expect(!FileManager.default.fileExists(atPath: path + "-missing"))
@@ -1079,20 +1084,23 @@ final class SelectionScenario: @unchecked Sendable {
     let database = data.appendingPathComponent("opencode.db")
     try Data().write(to: database)
     try Data(#"{"url":"http://127.0.0.1:4096","password":"synthetic-password"}"#.utf8).write(to: state.appendingPathComponent("service.json"))
-    let credential = StoredCredential(storedID: "cred_test", name: "Test", key: "private")
+    let credential = StoredCredential(storedID: "cred_test", name: "Test", key: "private", integration: "opencode-go")
+    let console = StoredCredential(storedID: "cred_console", name: "Console", key: "access", integration: "opencode")
     let selection = OpenCodeSelection(environment: [:], home: home.path, send: { request in
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("opencode:synthetic-password".utf8).base64EncodedString())
         #expect(request.httpBody == nil)
         let url = try #require(request.url)
+        let integrations = ["/api/integration/opencode-go": "cred_test", "/api/integration/opencode": "cred_console"]
         if request.httpMethod == "GET" {
-            #expect(url.path == "/api/integration/opencode-go")
-            return (Data(#"{"data":{"connections":[{"type":"credential","id":"cred_test"}]},"location":{}}"#.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            let id = try #require(integrations[url.path])
+            return (Data(#"{"data":{"connections":[{"type":"credential","id":"\#(id)"}]},"location":{}}"#.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         #expect(request.httpMethod == "POST")
-        #expect(url.path == "/api/credential/cred_test/activate")
+        #expect(["/api/credential/cred_test/activate", "/api/credential/cred_console/activate"].contains(url.path))
         return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
     })
     try await selection.activate(credential, databasePath: database.path)
+    try await selection.activate(console, databasePath: database.path)
     let other = home.appendingPathComponent("copy.db"); try Data().write(to: other)
     await #expect(throws: Fault.self) { try await selection.activate(credential, databasePath: other.path) }
     try FileManager.default.removeItem(at: state.appendingPathComponent("service.json"))
