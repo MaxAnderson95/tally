@@ -2,7 +2,7 @@ import Foundation
 
 struct AnthropicUsage: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let profileEndpoint = URL(string: "https://claude.ai/api/oauth/profile")!
+    static let profileEndpoint = URL(string: "https://api.anthropic.com/api/oauth/profile")!
     var session: URLSession = URLSession(configuration: .ephemeral)
 
     func job(access: String) -> CollectionJob {

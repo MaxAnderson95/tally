@@ -5,10 +5,10 @@ Verified September 7, 2026. `AnthropicUsage` reads stored OpenCode OAuth access 
 ## Verified provider interface
 
 - GET `https://api.anthropic.com/api/oauth/usage` uses Bearer authentication, `anthropic-beta: oauth-2025-04-20`, `Accept: application/json`, and `User-Agent: claude-code/2.1.69`. A live GET confirmed the endpoint and the legacy and structured schemas below. Header necessity was not tested by omission.
-- GET `https://claude.ai/api/oauth/profile` uses the same headers. A live GET confirmed `organization.organization_type`, `organization.rate_limit_tier`, and account subscription flags. Plan naming uses organization type. A Team organization reported `default_claude_max_5x` while its account's Max flag was false, so rate-limit tier must not name the subscription Max. Missing organization type stays unknown. Unrecognized organization types retain their provider text.
+- GET `https://api.anthropic.com/api/oauth/profile` uses the same headers. On November 23, 2026, this endpoint returned plan data for both stored accounts while the `claude.ai` host returned a Cloudflare challenge (HTTP 403). Plan naming uses `organization.organization_type`. A Team organization reported `default_claude_max_5x` while its account's Max flag was false, so rate-limit tier must not name the subscription Max. Missing organization type stays unknown. Unrecognized organization types retain their provider text.
 - Each request has a 10-second timeout. HTTP 401 blocks the credential through the owner. Other failures retain last-good values, with Retry-After and normal backoff. Provider bodies and credentials are absent from public errors.
 
-OpenUsage's checked upstream revision corroborates usage headers, legacy mappings, and scoped weekly limits. The bridge source corroborates profile URL and authentication. Anthropic's public Claude Code repository does not contain the private usage implementation; the current provider GET responses are the primary schema evidence.
+OpenUsage's checked upstream revision corroborates usage headers, legacy mappings, and scoped weekly limits. The bridge source corroborates profile authentication. Anthropic's public Claude Code repository does not contain the private usage implementation; the current provider GET responses are the primary schema evidence.
 
 https://github.com/robinebers/openusage/tree/70dea9a8fa21ed205aa9ad625b416a1e7792d5a1/Sources/OpenUsage/Providers/Claude
 

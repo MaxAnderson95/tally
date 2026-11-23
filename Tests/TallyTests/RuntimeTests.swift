@@ -938,10 +938,11 @@ private final class AnthropicProtocol: URLProtocol, @unchecked Sendable {
         #expect(request.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1.69")
         let token = request.value(forHTTPHeaderField: "Authorization")
         if token == "Bearer network" { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
-        let status = ["Bearer rejected": 401, "Bearer cooldown": 429, "Bearer server": 500, "Bearer overloaded": 529][token ?? ""] ?? 200
+        let status = request.url?.host == "claude.ai" ? 403 :
+            ["Bearer rejected": 401, "Bearer cooldown": 429, "Bearer server": 500, "Bearer overloaded": 529][token ?? ""] ?? 200
         let data: Data
         if token == "Bearer malformed" { data = Data("not json".utf8) }
-        else if request.url == AnthropicUsage.profileEndpoint { data = Data(#"{"organization":{"organization_type":"claude_pro"}}"#.utf8) }
+        else if request.url?.absoluteString == "https://api.anthropic.com/api/oauth/profile" { data = Data(#"{"organization":{"organization_type":"claude_pro"}}"#.utf8) }
         else { data = (try? fixture("anthropic-usage")) ?? Data() }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Retry-After": "600"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
