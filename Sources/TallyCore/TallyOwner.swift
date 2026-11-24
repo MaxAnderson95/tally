@@ -232,8 +232,9 @@ public actor TallyOwner {
         let statuses = warmupStatuses()
         return Dictionary(uniqueKeysWithValues: accounts.map { account in
             let value = statuses[account.id] ?? WarmupStatus()
-            return (account.id, WarmupReading(enabled: value.enabled, model: value.model, nextAt: value.nextAt,
-                lastAttemptAt: value.lastAttemptAt, message: value.message, needsAttention: value.needsAttention,
+            return (account.id, WarmupReading(enabled: value.enabled, model: value.model, startTime: value.startTime,
+                nextAt: value.nextAt, lastAttemptAt: value.lastAttemptAt, message: value.message,
+                needsAttention: value.needsAttention,
                 unavailableReason: WarmupStatus.availability(quotas: account.groups.quotas, model: "", now: clock()).reason))
         })
     }
@@ -261,11 +262,22 @@ public actor TallyOwner {
     }
 
     public func setWarmup(accountID: String, enabled: Bool, model: String) throws {
+        try updateWarmup(accountID: accountID, enabled: enabled, model: model, startTime: .none)
+    }
+
+    public func setWarmup(accountID: String, enabled: Bool, model: String, startTime: String?) throws {
+        try updateWarmup(accountID: accountID, enabled: enabled, model: model, startTime: .some(startTime))
+    }
+
+    private func updateWarmup(accountID: String, enabled: Bool, model: String, startTime: String??) throws {
         guard !stopping, let namespace = databaseIdentity, let credential = credentials[accountID] else {
             throw Fault("inventory_unavailable", "Refresh Account inventory before configuring warm-up.")
         }
         guard !enabled || (model.hasPrefix(credential.provider + "/") && model.count > credential.provider.count + 1 && !model.contains(where: { $0.isWhitespace })) else {
             throw Fault("warmup_model", "Choose a model belonging to this Account's provider.")
+        }
+        if case let .some(candidate) = startTime, let candidate, WarmupStatus.parseStartTime(candidate) == nil {
+            throw Fault("warmup_start_time", "Choose a valid daily start time in HH:MM format.")
         }
         if enabled, let account = accounts.first(where: { $0.id == accountID }),
            case .unnecessary = WarmupStatus.availability(quotas: account.groups.quotas, model: model, now: clock()) {
@@ -274,6 +286,7 @@ public actor TallyOwner {
         let previous = store.state.namespaces[namespace]?.warmups
         var value = previous?[accountID] ?? WarmupStatus()
         value.enabled = enabled; value.model = model
+        if case let .some(nextStartTime) = startTime { value.startTime = nextStartTime }
         value.revision = UUID().uuidString
         value.nextAt = nil; value.resetAt = nil; value.suspended = false
         value.message = enabled ? "Waiting for quota information" : "Off"
@@ -297,7 +310,7 @@ public actor TallyOwner {
             if redemptions.block(accountID: account.id, target: credential.evidence) != nil {
                 value.message = "Waiting for the pending reset operation"
             } else {
-                ready = value.prepare(quotas: account.groups.quotas, now: clock(), jitter: warmupJitter)
+                ready = value.prepare(quotas: account.groups.quotas, now: clock(), timezone: timezone(), jitter: warmupJitter)
             }
             let prompt = ready ? value.claim(at: clock()) : ""
             guard value != before else { continue }

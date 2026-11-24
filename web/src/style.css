@@ -273,9 +273,12 @@ body:has(dialog[open]) { overflow: hidden; }
 .sign-in-panel .primary-button, .sign-in-panel .quiet-button { min-height: 44px; font-size: 14px; }
 .sign-in input { min-height: 44px; }
 
-.warmup-model { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 12px; }
-.warmup-model > span { font-size: 12px; color: var(--dust); }
+.warmup-model, .warmup-start-time { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 12px; }
+.warmup-model > span, .warmup-start-time > label { font-size: 12px; color: var(--dust); }
 .warmup-model select { min-width: 0; width: 100%; min-height: 38px; padding: 0 10px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.warmup-time-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.warmup-time-control input[type="time"] { min-width: 0; min-height: 38px; padding: 0 10px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; color: inherit; }
+.warmup-time-any { font-size: 13px; color: var(--dust); }
 .warmup-status { color: var(--dust); font-size: 12px; overflow-wrap: anywhere; }
 .warmup-schedule { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px; font-size: 12px; }
 .warmup-schedule dt { color: var(--dust); }
@@ -328,8 +331,9 @@ body:has(dialog[open]) { overflow: hidden; }
   .color-options > div { grid-template-columns: repeat(3, 44px); }
   .color-options button { height: 44px; }
   .account-toggle, .account-selection .quiet-button { min-height: 36px; }
-  .warmup-model { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .warmup-model select { font-size: 16px; min-height: 44px; }
+  .warmup-model, .warmup-start-time { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .warmup-model select, .warmup-time-control input[type="time"] { font-size: 16px; min-height: 44px; }
+  .warmup-time-control .quiet-button { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

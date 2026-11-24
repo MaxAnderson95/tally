@@ -60,7 +60,7 @@ struct TallySettings: View {
     }
 
     @ViewBuilder private var warmup: some View {
-        Text("Start five-hour windows before you sit down to code. Choose a model for each account you turn on.")
+        Text("Start five-hour windows before you sit down to code. Choose a model and optional daily start time for each account you turn on.")
             .font(.system(size: 12)).foregroundStyle(Palette.dust).fixedSize(horizontal: false, vertical: true)
         ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
             let matches = accounts.filter { $0.provider == provider }
@@ -191,13 +191,17 @@ private struct WarmupSettings: View {
     @ObservedObject var runtime: Runtime
     @State private var models: [WarmupModel] = []
     @State private var selected = ""
+    @State private var startTime: String?
     @State private var enabled = false
     @State private var loading = true
     @State private var saving = false
+    @State private var saveRevision = 0
     @State private var error: String?
 
     private var status: WarmupStatus { runtime.warmups[account.id] ?? WarmupStatus() }
     private var availability: WarmupAvailability { WarmupStatus.availability(quotas: account.groups.quotas, model: selected) }
+    private var quotaUnavailable: Bool { WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason != nil }
+    private var canSaveEnabled: Bool { status.enabled || models.contains(where: { $0.id == selected }) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -238,7 +242,29 @@ private struct WarmupSettings: View {
                         ForEach(models) { model in Text(model.name).tag(model.id) }
                     }
                     .pickerStyle(.menu).fixedSize()
-                    .disabled(saving || models.isEmpty || WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason != nil)
+                    .disabled(saving || models.isEmpty || quotaUnavailable)
+                }
+                HStack(spacing: 8) {
+                    if let currentStartTime = startTime {
+                        DatePicker("First warm-up", selection: startTimeBinding(currentStartTime), displayedComponents: .hourAndMinute)
+                            .fixedSize()
+                            .disabled(quotaUnavailable)
+                        Button("Any time") {
+                            startTime = nil
+                            if canSaveEnabled { Task { await save() } }
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .disabled(saving || quotaUnavailable)
+                    } else {
+                        Text("First warm-up")
+                        Text("Any time").foregroundStyle(Palette.dust)
+                        Button("Set time") {
+                            startTime = "04:00"
+                            if canSaveEnabled { Task { await save() } }
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .disabled(saving || quotaUnavailable)
+                    }
                 }
                 if let error {
                     HStack(alignment: .top) {
@@ -265,11 +291,30 @@ private struct WarmupSettings: View {
         .animation(.easeOut(duration: 0.2), value: loading)
         .task(id: account.id) {
             selected = status.model
+            startTime = status.startTime
             enabled = status.enabled
             await loadModels()
         }
-        .onChange(of: status.model) { _, model in selected = model }
-        .onChange(of: status.enabled) { _, value in enabled = value }
+        .onChange(of: status.model) { _, model in if !saving { selected = model } }
+        .onChange(of: status.startTime) { _, value in if !saving { startTime = value } }
+        .onChange(of: status.enabled) { _, value in if !saving { enabled = value } }
+    }
+
+    private func startTimeBinding(_ value: String) -> Binding<Date> {
+        Binding(
+            get: {
+                let parts = WarmupStatus.parseStartTime(value) ?? (4, 0)
+                let calendar = Calendar.current
+                return calendar.date(bySettingHour: parts.hour, minute: parts.minute, second: 0, of: Date()) ?? Date()
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let formatted = WarmupStatus.formatStartTime(hour: components.hour ?? 4, minute: components.minute ?? 0)
+                guard formatted != startTime else { return }
+                startTime = formatted
+                if canSaveEnabled { Task { await save() } }
+            }
+        )
     }
 
     @ViewBuilder private var schedule: some View {
@@ -300,13 +345,33 @@ private struct WarmupSettings: View {
     }
 
     private func save() async {
+        saveRevision += 1
+        let revision = saveRevision
+        let nextEnabled = enabled
+        let nextModel = selected
+        let nextStartTime = startTime
         saving = true
-        defer { saving = false }
+        defer { if saveRevision == revision { saving = false } }
         do {
-            try await runtime.owner.setWarmup(accountID: account.id, enabled: enabled, model: selected)
-            runtime.warmups = await runtime.owner.warmupStatuses()
-            error = nil
-        } catch let fault as Fault { error = fault.message; enabled = status.enabled }
-        catch { self.error = "Could not save warm-up preferences."; enabled = status.enabled }
+            try await runtime.owner.setWarmup(accountID: account.id, enabled: nextEnabled, model: nextModel, startTime: nextStartTime)
+            if saveRevision == revision {
+                runtime.warmups = await runtime.owner.warmupStatuses()
+                error = nil
+            }
+        } catch let fault as Fault {
+            if saveRevision == revision {
+                error = fault.message
+                enabled = status.enabled
+                selected = status.model
+                startTime = status.startTime
+            }
+        } catch {
+            if saveRevision == revision {
+                self.error = "Could not save warm-up preferences."
+                enabled = status.enabled
+                selected = status.model
+                startTime = status.startTime
+            }
+        }
     }
 }

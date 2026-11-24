@@ -20,13 +20,14 @@ export function useWarmups() {
   const [readings, setReadings] = useState<Readings>()
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
-  const writing = useRef(false)
+  const writing = useRef(0)
+  const queue = useRef<Promise<void>>(Promise.resolve())
   const revision = useRef(0)
   useEffect(() => {
     const controller = new AbortController()
     let inFlight = false
     async function poll() {
-      if (document.hidden || inFlight || writing.current) return
+      if (document.hidden || inFlight || writing.current > 0) return
       inFlight = true
       const started = revision.current
       try {
@@ -44,23 +45,26 @@ export function useWarmups() {
     window.addEventListener('tally:operation', visible)
     return () => { controller.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', visible); window.removeEventListener('online', visible); window.removeEventListener('tally:operation', visible) }
   }, [])
-  async function save(accountID: string, enabled: boolean, model: string) {
-    if (writing.current) throw new Error('Another warm-up preference is being saved. Try again.')
-    writing.current = true
+  function save(accountID: string, enabled: boolean, model: string, startTime: string | null): Promise<void> {
+    writing.current++
     setSaving(true)
-    revision.current++
-    try {
-      const next = await request<Readings>(`/api/v1/accounts/${encodeURIComponent(accountID)}/warmup`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, model }), signal: AbortSignal.timeout(10_000),
-      })
-      setReadings(next)
-      setError(undefined)
-    } finally {
+    const run = queue.current.catch(() => {}).then(async () => {
       revision.current++
-      writing.current = false
-      setSaving(false)
-      window.dispatchEvent(new Event('tally:operation'))
-    }
+      try {
+        const next = await request<Readings>(`/api/v1/accounts/${encodeURIComponent(accountID)}/warmup`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, model, startTime }), signal: AbortSignal.timeout(10_000),
+        })
+        setReadings(next)
+        setError(undefined)
+      } finally {
+        revision.current++
+        writing.current--
+        if (writing.current === 0) setSaving(false)
+        window.dispatchEvent(new Event('tally:operation'))
+      }
+    })
+    queue.current = run
+    return run
   }
   return { readings, error, saving, save }
 }
@@ -68,15 +72,15 @@ export function useWarmups() {
 export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { accounts: Account[]; timezone: string; disabled: boolean; warmups: ReturnType<typeof useWarmups> }) {
   const { readings, error } = warmups
   return <div className="warmup-preferences">
-    <p className="warmup-intro">Start five-hour windows before you sit down to code. Choose a model for each account you enable.</p>
+    <p className="warmup-intro">Start five-hour windows before you sit down to code. Choose a model and optional daily start time for each account you enable.</p>
     {error && <p className="note-warn" role="alert">{error}</p>}
     {!readings && !error && <p role="status">Loading warm-up settings…</p>}
     {['anthropic', 'openai', 'opencode-go', 'xai'].map(provider => {
       const matches = accounts.filter(account => account.provider === provider)
       return matches.length > 0 && <section className="warmup-provider" key={provider} aria-label={providerName(provider)}>
         <h3><span aria-hidden="true"><ProviderLogo provider={provider} color={0} /></span>{providerName(provider)}</h3>
-        <div className="warmup-accounts">{matches.map(account => <WarmupAccount key={account.id} account={account} status={readings?.[account.id]} timezone={timezone} disabled={disabled || !!error || warmups.saving}
-          save={(enabled, model) => warmups.save(account.id, enabled, model)} />)}</div>
+        <div className="warmup-accounts">{matches.map(account => <WarmupAccount key={account.id} account={account} status={readings?.[account.id]} timezone={timezone} disabled={disabled || !!error}
+          save={(enabled, model, startTime) => warmups.save(account.id, enabled, model, startTime)} />)}</div>
       </section>
     })}
   </div>
@@ -84,17 +88,25 @@ export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { a
 
 function WarmupAccount({ account, status, timezone, disabled, save }: {
   account: Account; status: WarmupReading | undefined; timezone: string; disabled: boolean
-  save: (enabled: boolean, model: string) => Promise<void>
+  save: (enabled: boolean, model: string, startTime: string | null) => Promise<void>
 }) {
   const [models, setModels] = useState<WarmupModel[]>(() => modelCache.get(account.id) ?? [])
   const [selected, setSelected] = useState(status?.model ?? '')
+  const [startTime, setStartTime] = useState<string | null>(status?.startTime ?? null)
   const [enabled, setEnabled] = useState(status?.enabled ?? false)
   const [loading, setLoading] = useState(() => !modelCache.has(account.id))
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string>()
   const [error, setError] = useState<string>()
   const [attempt, setAttempt] = useState(0)
-  useEffect(() => { if (status) { setSelected(status.model); setEnabled(status.enabled) } }, [status?.model, status?.enabled])
+  const saveRevision = useRef(0)
+  useEffect(() => {
+    if (status && !saving) {
+      setSelected(status.model)
+      setEnabled(status.enabled)
+      setStartTime(status.startTime)
+    }
+  }, [status?.model, status?.enabled, status?.startTime, saving])
   useEffect(() => {
     const controller = new AbortController()
     if (!modelCache.has(account.id)) setLoading(true)
@@ -108,14 +120,23 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
     return () => controller.abort()
   }, [account.id, attempt])
 
-  async function change(nextEnabled: boolean, model: string) {
+  async function change(nextEnabled: boolean, model: string, nextStartTime: string | null) {
+    const currentRevision = ++saveRevision.current
     setSaving(true)
     setSaveError(undefined)
-    try { await save(nextEnabled, model) }
-    catch (failure) { setEnabled(status?.enabled ?? false); setSelected(status?.model ?? ''); setSaveError(failure instanceof Error ? failure.message : 'Could not save warm-up settings.') }
-    finally { setSaving(false) }
+    try { await save(nextEnabled, model, nextStartTime) }
+    catch (failure) {
+      if (saveRevision.current === currentRevision) {
+        setEnabled(status?.enabled ?? false)
+        setSelected(status?.model ?? '')
+        setStartTime(status?.startTime ?? null)
+        setSaveError(failure instanceof Error ? failure.message : 'Could not save warm-up settings.')
+      }
+    }
+    finally { if (saveRevision.current === currentRevision) setSaving(false) }
   }
   const unavailable = status?.unavailableReason
+  const canSaveEnabled = Boolean(status?.enabled || models.some(model => model.id === selected))
   const timestamp = status?.needsAttention && status.lastAttemptAt
     ? { label: 'Last attempt', date: status.lastAttemptAt }
     : status?.nextAt && Date.parse(status.nextAt) > Date.now() && !status.needsAttention
@@ -124,6 +145,7 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
       ? { label: 'Next check', date: account.groups.quotas.nextAttemptAt }
       : account.groups.quotas.observedAt ? { label: 'Last checked', date: account.groups.quotas.observedAt } : undefined
   const checkboxID = `warmup-${account.id}`
+  const timeID = `warmup-start-${account.id}`
   return <div className="warmup-account">
     <label className="warmup-toggle" htmlFor={checkboxID}>
       <span><strong>{account.name}</strong><small>{saving ? 'Saving…' : !status ? 'Loading…' : enabled ? !status.enabled ? 'Choose a model' : status.needsAttention ? 'Needs attention' : unavailable ? 'Waiting' : 'On' : 'Off'}</small></span>
@@ -133,21 +155,41 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
         onChange={event => {
           const next = event.target.checked
           setEnabled(next)
-          if (!next || models.some(model => model.id === selected)) void change(next, selected)
+          if (!next || models.some(model => model.id === selected)) void change(next, selected, startTime)
         }} /><span aria-hidden="true" /></span>
     </label>
     {unavailable && <p className="warmup-status warmup-unavailable" id={`${checkboxID}-reason`}>{unavailable}{enabled ? '. Your preference is saved.' : ''}</p>}
     <Collapse open={enabled} className="warmup-options">
       <label className="warmup-model"><span>Model</span>
         <select value={selected} disabled={disabled || saving || loading || !models.length || !!unavailable} aria-label={`Warm-up model for ${providerName(account.provider)} ${account.name}`}
-          onChange={event => { setSelected(event.target.value); void change(true, event.target.value) }}>
+          onChange={event => { setSelected(event.target.value); void change(true, event.target.value, startTime) }}>
           <option value="" disabled>{loading ? 'Loading models…' : 'Choose a model'}</option>
           {selected && !models.some(model => model.id === selected) && <option value={selected} disabled>{loading ? 'Loading models…' : `${selected} (unavailable)`}</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
         </select>
       </label>
+      <div className="warmup-start-time">
+        <label htmlFor={startTime !== null ? timeID : undefined}>First warm-up</label>
+        <div className="warmup-time-control">
+          {startTime !== null ? <>
+            <input id={timeID} type="time" value={startTime} disabled={disabled || !!unavailable}
+              aria-label={`First warm-up time for ${providerName(account.provider)} ${account.name}`}
+              onChange={event => {
+                const next = event.target.value || null
+                setStartTime(next)
+                if (canSaveEnabled) void change(true, selected, next)
+              }} />
+            <button type="button" className="quiet-button" disabled={disabled || saving || !!unavailable}
+              onClick={() => { setStartTime(null); if (canSaveEnabled) void change(true, selected, null) }}>Any time</button>
+          </> : <>
+            <span className="warmup-time-any">Any time</span>
+            <button type="button" className="quiet-button" disabled={disabled || saving || !!unavailable}
+              onClick={() => { setStartTime('04:00'); if (canSaveEnabled) void change(true, selected, '04:00') }}>Set time</button>
+          </>}
+        </div>
+      </div>
       {!status?.enabled && !error && <p className="warmup-status">Choose a model to start warming.</p>}
-      {status?.needsAttention && <p className="note-warn" role="status">{status.message} <button className="quiet-button" disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected)}>Resume</button></p>}
+      {status?.needsAttention && <p className="note-warn" role="status">{status.message} <button className="quiet-button" disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected, startTime)}>Resume</button></p>}
       {status?.enabled && timestamp && <dl className="warmup-schedule"><dt>{timestamp.label}</dt><dd><time dateTime={timestamp.date}><span>{new Date(timestamp.date).toLocaleDateString(undefined, { timeZone: timezone, dateStyle: 'medium' })}</span><span>{new Date(timestamp.date).toLocaleTimeString(undefined, { timeZone: timezone, timeStyle: 'short' })}</span></time></dd></dl>}
     </Collapse>
     {error && (enabled || saving) && <p className="note-warn" role="alert">{error} <button className="quiet-button" disabled={loading || saving} onClick={() => setAttempt(attempt + 1)}>Retry</button></p>}

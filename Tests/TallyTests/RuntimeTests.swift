@@ -97,6 +97,196 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     #expect(second != first)
 }
 
+@Test func warmupDailyStartTimeQuietHoursOverlapPreventionAndActiveOrDepletedResume() throws {
+    let zone = try #require(TimeZone(identifier: "America/New_York"))
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        calendar.date(from: DateComponents(timeZone: zone, year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    // Parse/format validation.
+    #expect(WarmupStatus.parseStartTime("04:00")?.hour == 4)
+    #expect(WarmupStatus.parseStartTime("04:00")?.minute == 0)
+    #expect(WarmupStatus.parseStartTime("23:59")?.hour == 23)
+    #expect(WarmupStatus.parseStartTime("23:59")?.minute == 59)
+    #expect(WarmupStatus.parseStartTime("24:00") == nil)
+    #expect(WarmupStatus.parseStartTime("04:60") == nil)
+    #expect(WarmupStatus.parseStartTime("4:00") == nil)
+    #expect(WarmupStatus.parseStartTime("noon") == nil)
+    #expect(WarmupStatus.parseStartTime(nil) == nil)
+    #expect(WarmupStatus.formatStartTime(hour: 4, minute: 5) == "04:05")
+
+    // Legacy WarmupStatus JSON without startTime decodes as nil ("Any time").
+    let legacyJSON = #"{"enabled":true,"message":"Scheduled","model":"openai/cheap","revision":"r1","suspended":false}"#
+    let legacy = try Wire.decoder().decode(WarmupStatus.self, from: Data(legacyJSON.utf8))
+    #expect(legacy.startTime == nil)
+
+    // 1. Quiet hours [00:00, 04:00): idle at 02:00 waits until 04:00 + jitter without re-rolling jitter, then fires.
+    var value = WarmupStatus()
+    value.enabled = true
+    value.startTime = "04:00"
+    let twoAM = local(2026, 6, 10, 2, 0)
+    var ready = value.prepare(quotas: warmupQuotas(at: twoAM), now: twoAM, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(value.nextAt == local(2026, 6, 10, 4, 10))
+    #expect(value.message == "Waiting for daily start time")
+    // Subsequent ticks during quiet hours keep the chosen jittered time.
+    let threeThirty = local(2026, 6, 10, 3, 30)
+    ready = value.prepare(quotas: warmupQuotas(at: threeThirty), now: threeThirty, timezone: zone, jitter: { 900 })
+    #expect(!ready)
+    #expect(value.nextAt == local(2026, 6, 10, 4, 10))
+    // Ready once 04:10 arrives with a post-schedule quota reading.
+    let fourTen = local(2026, 6, 10, 4, 10)
+    ready = value.prepare(quotas: warmupQuotas(at: fourTen.addingTimeInterval(-1)), now: fourTen, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    ready = value.prepare(quotas: warmupQuotas(at: fourTen), now: fourTen, timezone: zone, jitter: { 600 })
+    #expect(ready)
+
+    // 2. Active 5h window at 04:00 (started manually at 01:30, resets at 06:30): does not fire at 04:00, resumes at 06:30 + jitter.
+    var activeAtFour = WarmupStatus()
+    activeAtFour.enabled = true
+    activeAtFour.startTime = "04:00"
+    let fourAM = local(2026, 6, 10, 4, 0)
+    let sixThirty = local(2026, 6, 10, 6, 30)
+    ready = activeAtFour.prepare(quotas: warmupQuotas(at: fourAM, used: 25, reset: sixThirty), now: fourAM, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(activeAtFour.nextAt == local(2026, 6, 10, 6, 40))
+    #expect(activeAtFour.message == "Scheduled after the current window")
+    let sixForty = local(2026, 6, 10, 6, 40)
+    ready = activeAtFour.prepare(quotas: warmupQuotas(at: sixForty, used: 0, reset: sixThirty), now: sixForty, timezone: zone, jitter: { 600 })
+    #expect(ready)
+
+    // 3. Fully depleted 5h window at 04:00 (100% used, resets at 06:30): waits for allowance and resumes at 06:30 + jitter.
+    var depletedAtFour = WarmupStatus()
+    depletedAtFour.enabled = true
+    depletedAtFour.startTime = "04:00"
+    ready = depletedAtFour.prepare(quotas: warmupQuotas(at: fourAM, used: 100, reset: sixThirty), now: fourAM, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(depletedAtFour.nextAt == local(2026, 6, 10, 6, 40))
+    #expect(depletedAtFour.message == "Waiting for available allowance")
+    // Weekly block resetting during quiet hours (02:00 next day) defers to 04:00 next day + jitter.
+    var weeklyBlocked = warmupQuotas(at: fourAM, used: 0)
+    weeklyBlocked.data?.windows.append(QuotaWindow(id: "weekly", label: "Weekly", cadence: "weekly", durationSeconds: 604_800, durationSource: "provider", usedPercent: 100, resetAt: local(2026, 6, 11, 2, 0)))
+    ready = depletedAtFour.prepare(quotas: weeklyBlocked, now: fourAM, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(depletedAtFour.nextAt == local(2026, 6, 11, 4, 10))
+
+    // 4. Late-night overlap prevention: for startTime 04:00, cutoff is 23:00 (5h before 04:00).
+    // A window resetting at 23:30 defers to tomorrow 04:00 + jitter instead of overlapping 04:00.
+    var lateReset = WarmupStatus()
+    lateReset.enabled = true
+    lateReset.startTime = "04:00"
+    let tenPM = local(2026, 6, 10, 22, 0)
+    ready = lateReset.prepare(quotas: warmupQuotas(at: tenPM, used: 10, reset: local(2026, 6, 10, 23, 30)), now: tenPM, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(lateReset.nextAt == local(2026, 6, 11, 4, 10))
+    // An idle window at 22:55 whose +10m jitter crosses 23:00 also defers to tomorrow 04:00 + jitter.
+    var jitterCrosses = WarmupStatus()
+    jitterCrosses.enabled = true
+    jitterCrosses.startTime = "04:00"
+    let tenFiftyFive = local(2026, 6, 10, 22, 55)
+    ready = jitterCrosses.prepare(quotas: warmupQuotas(at: tenFiftyFive), now: tenFiftyFive, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(jitterCrosses.nextAt == local(2026, 6, 11, 4, 10))
+    // A scheduled time of 22:55 that wakes late at 23:02 does not fire past cutoff.
+    jitterCrosses.nextAt = local(2026, 6, 10, 22, 55)
+    let elevenOhTwo = local(2026, 6, 10, 23, 2)
+    ready = jitterCrosses.prepare(quotas: warmupQuotas(at: elevenOhTwo), now: elevenOhTwo, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(jitterCrosses.nextAt == local(2026, 6, 11, 4, 10))
+
+    // 5. Start time 06:00: cutoff is midnight (since 06:00 - 5h = 01:00 > 00:00).
+    // 23:30 + 10m = 23:40 is allowed (ends 04:40 < 06:00), whereas 00:05 waits until 06:00.
+    var sixAMStart = WarmupStatus()
+    sixAMStart.enabled = true
+    sixAMStart.startTime = "06:00"
+    let elevenThirty = local(2026, 6, 10, 23, 30)
+    ready = sixAMStart.prepare(quotas: warmupQuotas(at: elevenThirty), now: elevenThirty, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(sixAMStart.nextAt == local(2026, 6, 10, 23, 40))
+    sixAMStart.nextAt = nil
+    let twelveOhFive = local(2026, 6, 11, 0, 5)
+    ready = sixAMStart.prepare(quotas: warmupQuotas(at: twelveOhFive), now: twelveOhFive, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(sixAMStart.nextAt == local(2026, 6, 11, 6, 10))
+
+    // 6. DST spring-forward night (2026-03-08 in America/New_York): 04:00 EDT is only 3h after midnight,
+    // so 5 real hours earlier is 22:00 EST on March 7; 22:15 EST defers to March 8 04:00 EDT + jitter.
+    var dst = WarmupStatus()
+    dst.enabled = true
+    dst.startTime = "04:00"
+    let springEve = local(2026, 3, 7, 22, 15)
+    ready = dst.prepare(quotas: warmupQuotas(at: springEve), now: springEve, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(dst.nextAt == local(2026, 3, 8, 4, 10))
+
+    // 7. Very late startTime (23:55, 5m window < 10m jitter) still schedules inside [23:55, 24:00).
+    var veryLate = WarmupStatus()
+    veryLate.enabled = true
+    veryLate.startTime = "23:55"
+    let noon = local(2026, 6, 10, 12, 0)
+    ready = veryLate.prepare(quotas: warmupQuotas(at: noon), now: noon, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    let midnight = local(2026, 6, 11, 0, 0)
+    #expect(veryLate.nextAt != nil && veryLate.nextAt! >= local(2026, 6, 10, 23, 55) && veryLate.nextAt! < midnight)
+}
+
+@Test func warmupOwnerPersistsValidatesAndRespectsDailyStartTime() async throws {
+    let zone = try #require(TimeZone(identifier: "America/New_York"))
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        calendar.date(from: DateComponents(timeZone: zone, year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storage = root.appendingPathComponent("accounts.json")
+    final class ClockBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        private var sentCount = 0
+        init(_ date: Date) { current = date }
+        func now() -> Date { lock.withLock { current } }
+        func set(_ date: Date) { lock.withLock { current = date } }
+        func recordSend() { lock.withLock { sentCount += 1 } }
+        func sends() -> Int { lock.withLock { sentCount } }
+    }
+    let box = ClockBox(local(2026, 6, 10, 2, 0))
+    func makeOwner() -> TallyOwner {
+        TallyOwner(clock: { box.now() }, storageURL: storage, warmupSend: { _ in box.recordSend() }, warmupJitter: { 60 }, inventory: {
+            InventoryRead(databaseIdentity: "db", credentials: [StoredCredential(storedID: "acct", name: "Account", key: "synthetic")])
+        }, timezone: { zone }, collect: { _ in GoObservation(windows: warmupQuotas(at: box.now()).data!.windows) })
+    }
+    let owner = makeOwner()
+    await owner.tick(); await owner.waitForCollection()
+    let id = try #require(await owner.snapshot().accounts.first?.id)
+    await #expect(throws: Fault.self) { try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "25:00") }
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "04:00")
+    // Legacy overload without startTime preserves the saved startTime.
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap")
+    #expect(await owner.warmupReadings()[id]?.startTime == "04:00")
+    await owner.tick()
+    #expect(await owner.warmupReadings()[id]?.nextAt == local(2026, 6, 10, 4, 1))
+    #expect(box.sends() == 0)
+    await owner.shutdown()
+
+    // Persists across restart and fires once 04:01 arrives with a fresh quota reading.
+    let restarted = makeOwner()
+    await restarted.tick(); await restarted.waitForCollection(); await restarted.tick()
+    #expect(await restarted.warmupReadings()[id]?.startTime == "04:00")
+    #expect(box.sends() == 0)
+    box.set(local(2026, 6, 10, 4, 1))
+    try await restarted.refresh(accountIDs: [id]); await restarted.waitForCollection()
+    await restarted.tick(); await restarted.waitForWarmup()
+    #expect(box.sends() == 1)
+
+    // Clearing startTime back to nil ("Any time") persists.
+    try await restarted.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: nil)
+    #expect(await restarted.warmupReadings()[id]?.startTime == nil)
+    await restarted.shutdown()
+}
+
 @Test func warmupTracksChangingWindowsWithoutPlanAssumptions() throws {
     let now = Date(timeIntervalSince1970: 1_900_000_000)
     var value = WarmupStatus(); value.enabled = true; value.model = "openai/cheap"
