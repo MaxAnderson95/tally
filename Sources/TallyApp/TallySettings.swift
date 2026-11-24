@@ -60,7 +60,7 @@ struct TallySettings: View {
     }
 
     @ViewBuilder private var warmup: some View {
-        Text("Start five-hour windows before you sit down to code. Choose a model for each account you turn on.")
+        Text("Start five-hour windows before you sit down to code. Choose a model and optional daily start time for each account you turn on.")
             .font(.system(size: 12)).foregroundStyle(Palette.dust).fixedSize(horizontal: false, vertical: true)
         ForEach(["anthropic", "openai", "opencode-go", "xai"], id: \.self) { provider in
             let matches = accounts.filter { $0.provider == provider }
@@ -191,20 +191,35 @@ private struct WarmupSettings: View {
     @ObservedObject var runtime: Runtime
     @State private var models: [WarmupModel] = []
     @State private var selected = ""
+    @State private var startTime: String?
+    @State private var startTimeDirty = false
     @State private var enabled = false
     @State private var loading = true
     @State private var saving = false
+    @State private var pendingSave: PendingSave?
+    @State private var saveTask: Task<Void, Never>?
     @State private var error: String?
+
+    private struct PendingSave {
+        var full: (enabled: Bool, model: String)?
+        var startTime: String??
+
+        mutating func merge(_ next: PendingSave) {
+            if let full = next.full { self.full = full }
+            if let startTime = next.startTime { self.startTime = startTime }
+        }
+    }
 
     private var status: WarmupStatus { runtime.warmups[account.id] ?? WarmupStatus() }
     private var availability: WarmupAvailability { WarmupStatus.availability(quotas: account.groups.quotas, model: selected) }
+    private var quotaUnavailable: Bool { WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: Binding(get: { enabled }, set: { value in
                 enabled = value
                 if !value || models.contains(where: { $0.id == selected }) {
-                    Task { await save() }
+                    enqueueSave(PendingSave(full: (value, selected), startTime: startTimeDirty ? .some(startTime) : nil))
                 }
             })) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -229,7 +244,9 @@ private struct WarmupSettings: View {
                 } else {
                     Picker("Model", selection: Binding(get: { selected }, set: { model in
                         selected = model
-                        if models.contains(where: { $0.id == model }) { Task { await save() } }
+                        if models.contains(where: { $0.id == model }) {
+                            enqueueSave(PendingSave(full: (true, model), startTime: startTimeDirty ? .some(startTime) : nil))
+                        }
                     })) {
                         Text("Choose a model").tag("")
                         if !status.model.isEmpty && !models.contains(where: { $0.id == status.model }) {
@@ -238,7 +255,27 @@ private struct WarmupSettings: View {
                         ForEach(models) { model in Text(model.name).tag(model.id) }
                     }
                     .pickerStyle(.menu).fixedSize()
-                    .disabled(saving || models.isEmpty || WarmupStatus.availability(quotas: account.groups.quotas, model: "").reason != nil)
+                    .disabled(saving || models.isEmpty || quotaUnavailable)
+                }
+                HStack(spacing: 8) {
+                    if let currentStartTime = startTime {
+                        DatePicker("First warm-up", selection: startTimeBinding(currentStartTime), displayedComponents: .hourAndMinute)
+                            .fixedSize()
+                            .disabled(quotaUnavailable)
+                        Button("Any time") {
+                            updateStartTime(nil)
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .disabled(saving || quotaUnavailable)
+                    } else {
+                        Text("First warm-up")
+                        Text("Any time").foregroundStyle(Palette.dust)
+                        Button("Set time") {
+                            updateStartTime("04:00")
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .disabled(saving || quotaUnavailable)
+                    }
                 }
                 if let error {
                     HStack(alignment: .top) {
@@ -253,7 +290,9 @@ private struct WarmupSettings: View {
                         HStack(alignment: .top) {
                             Text(status.message).font(.system(size: 11)).foregroundStyle(Palette.ember).fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            Button("Resume") { Task { await save() } }.buttonStyle(QuietButtonStyle())
+                            Button("Resume") {
+                                enqueueSave(PendingSave(full: (true, selected), startTime: startTimeDirty ? .some(startTime) : nil))
+                            }.buttonStyle(QuietButtonStyle())
                                 .disabled(saving || loading || !models.contains(where: { $0.id == selected }))
                         }
                     }
@@ -265,11 +304,43 @@ private struct WarmupSettings: View {
         .animation(.easeOut(duration: 0.2), value: loading)
         .task(id: account.id) {
             selected = status.model
+            startTime = status.startTime
+            startTimeDirty = false
             enabled = status.enabled
             await loadModels()
         }
-        .onChange(of: status.model) { _, model in selected = model }
-        .onChange(of: status.enabled) { _, value in enabled = value }
+        .onChange(of: status.model) { _, model in if !saving { selected = model } }
+        .onChange(of: status.startTime) { _, value in if !saving && !startTimeDirty { startTime = value } }
+        .onChange(of: status.enabled) { _, value in if !saving { enabled = value } }
+    }
+
+    private func updateStartTime(_ next: String?) {
+        startTime = next
+        if status.enabled {
+            enqueueSave(PendingSave(full: nil, startTime: .some(next)))
+        } else if models.contains(where: { $0.id == selected }) {
+            enqueueSave(PendingSave(full: (true, selected), startTime: .some(next)))
+        } else {
+            startTimeDirty = true
+        }
+    }
+
+    private func startTimeBinding(_ value: String) -> Binding<Date> {
+        Binding(
+            get: {
+                let parts = WarmupStatus.parseStartTime(value) ?? (4, 0)
+                let calendar = Calendar.current
+                let year = calendar.component(.year, from: Date())
+                // Use Jan 1 as a non-DST reference day so spring-forward hours like 02:30 do not shift in the picker.
+                return calendar.date(from: DateComponents(year: year, month: 1, day: 1, hour: parts.hour, minute: parts.minute)) ?? Date()
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let formatted = WarmupStatus.formatStartTime(hour: components.hour ?? 4, minute: components.minute ?? 0)
+                guard formatted != startTime else { return }
+                updateStartTime(formatted)
+            }
+        )
     }
 
     @ViewBuilder private var schedule: some View {
@@ -299,14 +370,55 @@ private struct WarmupSettings: View {
         catch { self.error = "Could not load models from the provider." }
     }
 
-    private func save() async {
+    private func enqueueSave(_ next: PendingSave) {
+        if var existing = pendingSave {
+            existing.merge(next)
+            pendingSave = existing
+        } else {
+            pendingSave = next
+        }
+        guard saveTask == nil else { return }
+        saveTask = Task { await drainSaves() }
+    }
+
+    private func drainSaves() async {
         saving = true
-        defer { saving = false }
-        do {
-            try await runtime.owner.setWarmup(accountID: account.id, enabled: enabled, model: selected)
-            runtime.warmups = await runtime.owner.warmupStatuses()
-            error = nil
-        } catch let fault as Fault { error = fault.message; enabled = status.enabled }
-        catch { self.error = "Could not save warm-up preferences."; enabled = status.enabled }
+        defer { saving = false; saveTask = nil }
+        while let current = pendingSave {
+            pendingSave = nil
+            do {
+                if let full = current.full {
+                    if let nextStartTime = current.startTime {
+                        try await runtime.owner.setWarmup(accountID: account.id, enabled: full.enabled, model: full.model, startTime: nextStartTime)
+                        startTimeDirty = false
+                    } else {
+                        try await runtime.owner.setWarmup(accountID: account.id, enabled: full.enabled, model: full.model)
+                    }
+                } else if let nextStartTime = current.startTime {
+                    try await runtime.owner.setWarmupStartTime(accountID: account.id, startTime: nextStartTime)
+                    startTimeDirty = false
+                }
+                if pendingSave == nil {
+                    runtime.warmups = await runtime.owner.warmupStatuses()
+                    error = nil
+                }
+            } catch let fault as Fault {
+                if pendingSave == nil {
+                    error = fault.message
+                    enabled = status.enabled
+                    selected = status.model
+                    startTime = status.startTime
+                    startTimeDirty = false
+                }
+            } catch {
+                if pendingSave == nil {
+                    self.error = "Could not save warm-up preferences."
+                    enabled = status.enabled
+                    selected = status.model
+                    startTime = status.startTime
+                    startTimeDirty = false
+                }
+            }
+        }
     }
 }

@@ -53,7 +53,7 @@ export type Schedule = { state: 'started' | 'joined' | 'deferred' | 'blocked'; n
 export type RefreshResponse = { accounts: { accountId: string; schedule: Schedule }[]; activity: Schedule }
 export type WarmupModel = { id: string; name: string }
 export type WarmupReading = {
-  enabled: boolean; model: string; nextAt: string | null; lastAttemptAt: string | null
+  enabled: boolean; model: string; startTime: string | null; nextAt: string | null; lastAttemptAt: string | null
   message: string; needsAttention: boolean; unavailableReason: string | null
 }
 export type Redemption = {
