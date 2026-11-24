@@ -279,6 +279,7 @@ body:has(dialog[open]) { overflow: hidden; }
 .warmup-time-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .warmup-time-control input[type="time"] { min-width: 0; min-height: 38px; padding: 0 10px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; color: inherit; }
 .warmup-time-any { font-size: 13px; color: var(--dust); }
+.warmup-timezone { font-size: 12px; color: var(--dust); }
 .warmup-status { color: var(--dust); font-size: 12px; overflow-wrap: anywhere; }
 .warmup-schedule { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px; font-size: 12px; }
 .warmup-schedule dt { color: var(--dust); }

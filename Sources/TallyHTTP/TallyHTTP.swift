@@ -123,24 +123,30 @@ public struct TallyResponder: HTTPResponder {
                 guard request.method == .put else { return failure(.methodNotAllowed, Fault("method_not_allowed", "Use PUT to save warm-up settings.")) }
                 let buffer = try await request.body.collect(upTo: 16_384)
                 struct Input: Decodable {
-                    var enabled: Bool
-                    var model: String
+                    var enabled: Bool?
+                    var model: String?
                     var hasStartTime: Bool
                     var startTime: String?
                     enum CodingKeys: String, CodingKey { case enabled, model, startTime }
                     init(from decoder: any Decoder) throws {
                         let fields = try decoder.container(keyedBy: CodingKeys.self)
-                        enabled = try fields.decode(Bool.self, forKey: .enabled)
-                        model = try fields.decode(String.self, forKey: .model)
+                        enabled = fields.contains(.enabled) ? try fields.decode(Bool.self, forKey: .enabled) : nil
+                        model = fields.contains(.model) ? try fields.decode(String.self, forKey: .model) : nil
                         hasStartTime = fields.contains(.startTime)
                         startTime = hasStartTime ? try fields.decodeIfPresent(String.self, forKey: .startTime) : nil
                     }
                 }
                 let input = try JSONDecoder().decode(Input.self, from: Data(buffer.readableBytesView))
-                if input.hasStartTime {
-                    try await owner.setWarmup(accountID: String(parts[4]), enabled: input.enabled, model: input.model, startTime: input.startTime)
+                if let enabled = input.enabled, let model = input.model {
+                    if input.hasStartTime {
+                        try await owner.setWarmup(accountID: String(parts[4]), enabled: enabled, model: model, startTime: input.startTime)
+                    } else {
+                        try await owner.setWarmup(accountID: String(parts[4]), enabled: enabled, model: model)
+                    }
+                } else if input.enabled == nil && input.model == nil && input.hasStartTime {
+                    try await owner.setWarmupStartTime(accountID: String(parts[4]), startTime: input.startTime)
                 } else {
-                    try await owner.setWarmup(accountID: String(parts[4]), enabled: input.enabled, model: input.model)
+                    throw Fault("invalid_request", "Include both enabled and model, or startTime alone.")
                 }
                 return try json(await owner.warmupReadings())
             }

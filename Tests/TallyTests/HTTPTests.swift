@@ -75,6 +75,7 @@ private func authState(_ directory: URL) -> URL { directory.appendingPathExtensi
             #expect(response.status == .ok)
             let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
             #expect(readings[eligible.id]?.startTime == "04:00")
+            #expect(readings[eligible.id]?.nextAt != nil)
             #expect(await owner.warmupStatuses()[eligible.id]?.startTime == "04:00")
         }
         // Omitting startTime preserves the saved start time.
@@ -83,12 +84,29 @@ private func authState(_ directory: URL) -> URL { directory.appendingPathExtensi
             let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
             #expect(readings[eligible.id]?.startTime == "04:00")
         }
-        // Explicitly sending null clears startTime back to "Any time".
-        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":true,\"model\":\"opencode-go/cheap\",\"startTime\":null}")) { response in
+        // Time-only PUT updates startTime without requiring enabled/model or altering enabled state.
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"startTime\":\"05:15\"}")) { response in
             #expect(response.status == .ok)
             let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
+            #expect(readings[eligible.id]?.enabled == true)
+            #expect(readings[eligible.id]?.startTime == "05:15")
+            #expect(readings[eligible.id]?.nextAt != nil)
+        }
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":false,\"model\":\"opencode-go/cheap\"}")) { #expect($0.status == .ok) }
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"startTime\":\"06:00\"}")) { response in
+            #expect(response.status == .ok)
+            let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
+            #expect(readings[eligible.id]?.enabled == false)
+            #expect(readings[eligible.id]?.startTime == "06:00")
+        }
+        // Explicitly sending null clears startTime back to "Any time".
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"startTime\":null}")) { response in
+            #expect(response.status == .ok)
+            let readings = try Wire.decoder().decode([String: WarmupReading].self, from: Data(response.body.readableBytesView))
+            #expect(readings[eligible.id]?.enabled == false)
             #expect(readings[eligible.id]?.startTime == nil)
         }
+        try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{}")) { #expect($0.status == .badRequest) }
         try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":true,\"model\":\"opencode-go/cheap\",\"startTime\":\"25:00\"}")) { #expect($0.status == .badRequest) }
         try await client.execute(uri: "/api/v1/accounts/\(weekly.id)/warmup", method: .put, headers: headers, body: .init(string: "{\"enabled\":true,\"model\":\"xai/cheap\"}")) { #expect($0.status == .badRequest) }
         try await client.execute(uri: path, method: .put, headers: headers, body: .init(string: "{\"enabled\":true}")) { #expect($0.status == .badRequest) }

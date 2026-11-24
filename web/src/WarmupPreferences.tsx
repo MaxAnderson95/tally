@@ -4,8 +4,14 @@ import { ProviderLogo, providerName } from './ProviderLogo'
 import { Collapse } from './motion'
 
 type Readings = Record<string, WarmupReading>
+type WarmupPatch = { enabled?: boolean; model?: string; startTime?: string | null }
+type PendingWrite = {
+  patch: WarmupPatch
+  resolvers: { resolve: () => void; reject: (error: unknown) => void }[]
+}
 // Model lists outlive the sheet so reopening Settings shows names immediately instead of raw model IDs.
 const modelCache = new Map<string, WarmupModel[]>()
+const TIME_RE = /^\d{2}:\d{2}$/
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...options })
@@ -16,18 +22,26 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return response.json()
 }
 
+function mergePatch(previous: WarmupPatch, next: WarmupPatch): WarmupPatch {
+  const merged: WarmupPatch = { ...previous }
+  if (next.enabled !== undefined) merged.enabled = next.enabled
+  if (next.model !== undefined) merged.model = next.model
+  if ('startTime' in next) merged.startTime = next.startTime
+  return merged
+}
+
 export function useWarmups() {
   const [readings, setReadings] = useState<Readings>()
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
-  const writing = useRef(0)
-  const queue = useRef<Promise<void>>(Promise.resolve())
+  const activeAccounts = useRef(new Set<string>())
+  const pendingByAccount = useRef(new Map<string, PendingWrite>())
   const revision = useRef(0)
   useEffect(() => {
     const controller = new AbortController()
     let inFlight = false
     async function poll() {
-      if (document.hidden || inFlight || writing.current > 0) return
+      if (document.hidden || inFlight || activeAccounts.current.size > 0) return
       inFlight = true
       const started = revision.current
       try {
@@ -45,26 +59,45 @@ export function useWarmups() {
     window.addEventListener('tally:operation', visible)
     return () => { controller.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', visible); window.removeEventListener('online', visible); window.removeEventListener('tally:operation', visible) }
   }, [])
-  function save(accountID: string, enabled: boolean, model: string, startTime: string | null): Promise<void> {
-    writing.current++
+  async function drain(accountID: string) {
+    activeAccounts.current.add(accountID)
     setSaving(true)
-    const run = queue.current.catch(() => {}).then(async () => {
-      revision.current++
-      try {
-        const next = await request<Readings>(`/api/v1/accounts/${encodeURIComponent(accountID)}/warmup`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, model, startTime }), signal: AbortSignal.timeout(10_000),
-        })
-        setReadings(next)
-        setError(undefined)
-      } finally {
+    try {
+      while (true) {
+        const next = pendingByAccount.current.get(accountID)
+        if (!next) break
+        pendingByAccount.current.delete(accountID)
         revision.current++
-        writing.current--
-        if (writing.current === 0) setSaving(false)
-        window.dispatchEvent(new Event('tally:operation'))
+        try {
+          const updated = await request<Readings>(`/api/v1/accounts/${encodeURIComponent(accountID)}/warmup`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next.patch), signal: AbortSignal.timeout(10_000),
+          })
+          setReadings(updated)
+          setError(undefined)
+          for (const entry of next.resolvers) entry.resolve()
+        } catch (failure) {
+          for (const entry of next.resolvers) entry.reject(failure)
+        } finally {
+          revision.current++
+        }
       }
+    } finally {
+      activeAccounts.current.delete(accountID)
+      if (activeAccounts.current.size === 0) setSaving(false)
+      window.dispatchEvent(new Event('tally:operation'))
+    }
+  }
+  function save(accountID: string, patch: WarmupPatch): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const existing = pendingByAccount.current.get(accountID)
+      if (existing) {
+        existing.patch = mergePatch(existing.patch, patch)
+        existing.resolvers.push({ resolve, reject })
+      } else {
+        pendingByAccount.current.set(accountID, { patch, resolvers: [{ resolve, reject }] })
+      }
+      if (!activeAccounts.current.has(accountID)) void drain(accountID)
     })
-    queue.current = run
-    return run
   }
   return { readings, error, saving, save }
 }
@@ -80,7 +113,7 @@ export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { a
       return matches.length > 0 && <section className="warmup-provider" key={provider} aria-label={providerName(provider)}>
         <h3><span aria-hidden="true"><ProviderLogo provider={provider} color={0} /></span>{providerName(provider)}</h3>
         <div className="warmup-accounts">{matches.map(account => <WarmupAccount key={account.id} account={account} status={readings?.[account.id]} timezone={timezone} disabled={disabled || !!error}
-          save={(enabled, model, startTime) => warmups.save(account.id, enabled, model, startTime)} />)}</div>
+          save={patch => warmups.save(account.id, patch)} />)}</div>
       </section>
     })}
   </div>
@@ -88,11 +121,12 @@ export function WarmupPreferences({ accounts, timezone, disabled, warmups }: { a
 
 function WarmupAccount({ account, status, timezone, disabled, save }: {
   account: Account; status: WarmupReading | undefined; timezone: string; disabled: boolean
-  save: (enabled: boolean, model: string, startTime: string | null) => Promise<void>
+  save: (patch: WarmupPatch) => Promise<void>
 }) {
   const [models, setModels] = useState<WarmupModel[]>(() => modelCache.get(account.id) ?? [])
   const [selected, setSelected] = useState(status?.model ?? '')
   const [startTime, setStartTime] = useState<string | null>(status?.startTime ?? null)
+  const [startTimeDirty, setStartTimeDirty] = useState(false)
   const [enabled, setEnabled] = useState(status?.enabled ?? false)
   const [loading, setLoading] = useState(() => !modelCache.has(account.id))
   const [saving, setSaving] = useState(false)
@@ -104,9 +138,9 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
     if (status && !saving) {
       setSelected(status.model)
       setEnabled(status.enabled)
-      setStartTime(status.startTime)
+      if (!startTimeDirty) setStartTime(status.startTime)
     }
-  }, [status?.model, status?.enabled, status?.startTime, saving])
+  }, [status?.model, status?.enabled, status?.startTime, saving, startTimeDirty])
   useEffect(() => {
     const controller = new AbortController()
     if (!modelCache.has(account.id)) setLoading(true)
@@ -120,23 +154,38 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
     return () => controller.abort()
   }, [account.id, attempt])
 
-  async function change(nextEnabled: boolean, model: string, nextStartTime: string | null) {
+  async function change(patch: WarmupPatch) {
     const currentRevision = ++saveRevision.current
     setSaving(true)
     setSaveError(undefined)
-    try { await save(nextEnabled, model, nextStartTime) }
-    catch (failure) {
+    try {
+      await save(patch)
+      if (saveRevision.current === currentRevision && 'startTime' in patch) setStartTimeDirty(false)
+    } catch (failure) {
       if (saveRevision.current === currentRevision) {
         setEnabled(status?.enabled ?? false)
         setSelected(status?.model ?? '')
         setStartTime(status?.startTime ?? null)
+        setStartTimeDirty(false)
         setSaveError(failure instanceof Error ? failure.message : 'Could not save warm-up settings.')
       }
+    } finally {
+      if (saveRevision.current === currentRevision) setSaving(false)
     }
-    finally { if (saveRevision.current === currentRevision) setSaving(false) }
+  }
+  function updateStartTime(next: string | null) {
+    setStartTime(next)
+    if (status?.enabled) {
+      void change({ startTime: next })
+    } else if (models.some(model => model.id === selected)) {
+      void change({ enabled: true, model: selected, startTime: next })
+    } else {
+      setStartTimeDirty(true)
+    }
   }
   const unavailable = status?.unavailableReason
-  const canSaveEnabled = Boolean(status?.enabled || models.some(model => model.id === selected))
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const showTimezone = Boolean(timezone && browserTimezone && timezone !== browserTimezone)
   const timestamp = status?.needsAttention && status.lastAttemptAt
     ? { label: 'Last attempt', date: status.lastAttemptAt }
     : status?.nextAt && Date.parse(status.nextAt) > Date.now() && !status.needsAttention
@@ -155,14 +204,19 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
         onChange={event => {
           const next = event.target.checked
           setEnabled(next)
-          if (!next || models.some(model => model.id === selected)) void change(next, selected, startTime)
+          if (!next || models.some(model => model.id === selected)) {
+            void change(startTimeDirty ? { enabled: next, model: selected, startTime } : { enabled: next, model: selected })
+          }
         }} /><span aria-hidden="true" /></span>
     </label>
     {unavailable && <p className="warmup-status warmup-unavailable" id={`${checkboxID}-reason`}>{unavailable}{enabled ? '. Your preference is saved.' : ''}</p>}
     <Collapse open={enabled} className="warmup-options">
       <label className="warmup-model"><span>Model</span>
         <select value={selected} disabled={disabled || saving || loading || !models.length || !!unavailable} aria-label={`Warm-up model for ${providerName(account.provider)} ${account.name}`}
-          onChange={event => { setSelected(event.target.value); void change(true, event.target.value, startTime) }}>
+          onChange={event => {
+            setSelected(event.target.value)
+            void change(startTimeDirty ? { enabled: true, model: event.target.value, startTime } : { enabled: true, model: event.target.value })
+          }}>
           <option value="" disabled>{loading ? 'Loading models…' : 'Choose a model'}</option>
           {selected && !models.some(model => model.id === selected) && <option value={selected} disabled>{loading ? 'Loading models…' : `${selected} (unavailable)`}</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
@@ -175,21 +229,21 @@ function WarmupAccount({ account, status, timezone, disabled, save }: {
             <input id={timeID} type="time" value={startTime} disabled={disabled || !!unavailable}
               aria-label={`First warm-up time for ${providerName(account.provider)} ${account.name}`}
               onChange={event => {
-                const next = event.target.value || null
-                setStartTime(next)
-                if (canSaveEnabled) void change(true, selected, next)
+                if (!TIME_RE.test(event.target.value)) return
+                updateStartTime(event.target.value)
               }} />
             <button type="button" className="quiet-button" disabled={disabled || saving || !!unavailable}
-              onClick={() => { setStartTime(null); if (canSaveEnabled) void change(true, selected, null) }}>Any time</button>
+              onClick={() => updateStartTime(null)}>Any time</button>
+            {showTimezone && <span className="warmup-timezone">{timezone}</span>}
           </> : <>
             <span className="warmup-time-any">Any time</span>
             <button type="button" className="quiet-button" disabled={disabled || saving || !!unavailable}
-              onClick={() => { setStartTime('04:00'); if (canSaveEnabled) void change(true, selected, '04:00') }}>Set time</button>
+              onClick={() => updateStartTime('04:00')}>Set time</button>
           </>}
         </div>
       </div>
       {!status?.enabled && !error && <p className="warmup-status">Choose a model to start warming.</p>}
-      {status?.needsAttention && <p className="note-warn" role="status">{status.message} <button className="quiet-button" disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(true, selected, startTime)}>Resume</button></p>}
+      {status?.needsAttention && <p className="note-warn" role="status">{status.message} <button className="quiet-button" disabled={disabled || saving || loading || !models.some(model => model.id === selected)} onClick={() => void change(startTimeDirty ? { enabled: true, model: selected, startTime } : { enabled: true, model: selected })}>Resume</button></p>}
       {status?.enabled && timestamp && <dl className="warmup-schedule"><dt>{timestamp.label}</dt><dd><time dateTime={timestamp.date}><span>{new Date(timestamp.date).toLocaleDateString(undefined, { timeZone: timezone, dateStyle: 'medium' })}</span><span>{new Date(timestamp.date).toLocaleTimeString(undefined, { timeZone: timezone, timeStyle: 'short' })}</span></time></dd></dl>}
     </Collapse>
     {error && (enabled || saving) && <p className="note-warn" role="alert">{error} <button className="quiet-button" disabled={loading || saving} onClick={() => setAttempt(attempt + 1)}>Retry</button></p>}

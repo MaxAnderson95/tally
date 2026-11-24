@@ -221,15 +221,63 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     #expect(!ready)
     #expect(dst.nextAt == local(2026, 3, 8, 4, 10))
 
-    // 7. Very late startTime (23:55, 5m window < 10m jitter) still schedules inside [23:55, 24:00).
+    // 7. Very late startTime (23:55, 5m window < 20m max jitter) reserves 180s poll headroom (schedules at 23:57:00).
     var veryLate = WarmupStatus()
     veryLate.enabled = true
     veryLate.startTime = "23:55"
     let noon = local(2026, 6, 10, 12, 0)
-    ready = veryLate.prepare(quotas: warmupQuotas(at: noon), now: noon, timezone: zone, jitter: { 600 })
+    ready = veryLate.prepare(quotas: warmupQuotas(at: noon), now: noon, timezone: zone, jitter: { 1200 })
     #expect(!ready)
-    let midnight = local(2026, 6, 11, 0, 0)
-    #expect(veryLate.nextAt != nil && veryLate.nextAt! >= local(2026, 6, 10, 23, 55) && veryLate.nextAt! < midnight)
+    #expect(veryLate.nextAt == local(2026, 6, 10, 23, 57))
+    // Cutoff headroom applies to regular windows too: 22:48 + 10m = 22:58 (> 22:57) defers to tomorrow 04:00.
+    var nearCutoff = WarmupStatus()
+    nearCutoff.enabled = true
+    nearCutoff.startTime = "04:00"
+    let tenFortyEight = local(2026, 6, 10, 22, 48)
+    ready = nearCutoff.prepare(quotas: warmupQuotas(at: tenFortyEight), now: tenFortyEight, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(nearCutoff.nextAt == local(2026, 6, 11, 4, 10))
+    // 23:59 with no post-schedule poll before midnight rolls forward to tomorrow without firing after midnight.
+    var lastMinute = WarmupStatus()
+    lastMinute.enabled = true
+    lastMinute.startTime = "23:59"
+    ready = lastMinute.prepare(quotas: warmupQuotas(at: noon), now: noon, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(lastMinute.nextAt == local(2026, 6, 10, 23, 59))
+    let afterMidnight = local(2026, 6, 11, 0, 1)
+    ready = lastMinute.prepare(quotas: warmupQuotas(at: afterMidnight), now: afterMidnight, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(lastMinute.nextAt == local(2026, 6, 11, 23, 59))
+
+    // 8. Midnight DST transition (America/Havana on March 8, 2026: 00:00 -> 01:00):
+    // March 8 21:00 CDT must defer to March 9 00:30 CDT + jitter because cutoff is March 8 19:30 CDT.
+    let havana = try #require(TimeZone(identifier: "America/Havana"))
+    var havanaCal = Calendar(identifier: .gregorian)
+    havanaCal.timeZone = havana
+    let mar8Evening = havanaCal.date(from: DateComponents(timeZone: havana, year: 2026, month: 3, day: 8, hour: 21, minute: 0))!
+    let mar9ZeroForty = havanaCal.date(from: DateComponents(timeZone: havana, year: 2026, month: 3, day: 9, hour: 0, minute: 40))!
+    var havanaStatus = WarmupStatus()
+    havanaStatus.enabled = true
+    havanaStatus.startTime = "00:30"
+    ready = havanaStatus.prepare(quotas: warmupQuotas(at: mar8Evening), now: mar8Evening, timezone: havana, jitter: { 600 })
+    #expect(!ready)
+    #expect(havanaStatus.nextAt == mar9ZeroForty)
+
+    // 9. Timezone change (America/Los_Angeles -> America/New_York) recomputes a pending 04:10 PT (07:10 ET) to 04:10 ET.
+    let pacific = try #require(TimeZone(identifier: "America/Los_Angeles"))
+    var pacificCal = Calendar(identifier: .gregorian)
+    pacificCal.timeZone = pacific
+    let twoAMPacific = pacificCal.date(from: DateComponents(timeZone: pacific, year: 2026, month: 6, day: 10, hour: 2, minute: 0))!
+    var travel = WarmupStatus()
+    travel.enabled = true
+    travel.startTime = "04:00"
+    ready = travel.prepare(quotas: warmupQuotas(at: twoAMPacific), now: twoAMPacific, timezone: pacific, jitter: { 600 })
+    #expect(!ready)
+    #expect(travel.nextAt == local(2026, 6, 10, 7, 10))
+    let threeAMEastern = local(2026, 6, 10, 3, 0)
+    ready = travel.prepare(quotas: warmupQuotas(at: threeAMEastern), now: threeAMEastern, timezone: zone, jitter: { 600 })
+    #expect(!ready)
+    #expect(travel.nextAt == local(2026, 6, 10, 4, 10))
 }
 
 @Test func warmupOwnerPersistsValidatesAndRespectsDailyStartTime() async throws {
@@ -263,6 +311,9 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     let id = try #require(await owner.snapshot().accounts.first?.id)
     await #expect(throws: Fault.self) { try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "25:00") }
     try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "04:00")
+    // Immediately computes nextAt before tick() with zero sends.
+    #expect(await owner.warmupReadings()[id]?.nextAt == local(2026, 6, 10, 4, 1))
+    #expect(box.sends() == 0)
     // Legacy overload without startTime preserves the saved startTime.
     try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap")
     #expect(await owner.warmupReadings()[id]?.startTime == "04:00")
@@ -281,10 +332,123 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     await restarted.tick(); await restarted.waitForWarmup()
     #expect(box.sends() == 1)
 
-    // Clearing startTime back to nil ("Any time") persists.
-    try await restarted.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: nil)
+    // Clearing startTime back to nil ("Any time") persists via setWarmupStartTime.
+    try await restarted.setWarmupStartTime(accountID: id, startTime: nil)
     #expect(await restarted.warmupReadings()[id]?.startTime == nil)
     await restarted.shutdown()
+}
+
+@Test func warmupStartTimeEditPreservesPauseDisabledAndInFlightSend() async throws {
+    let zone = try #require(TimeZone(identifier: "America/New_York"))
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        calendar.date(from: DateComponents(timeZone: zone, year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+    actor Gate {
+        private var startedContinuation: CheckedContinuation<Void, Never>?
+        private var releaseContinuation: CheckedContinuation<Void, Never>?
+        private var hasStarted = false
+        private var shouldFail = false
+        var sends = 0
+
+        func arm(fail: Bool) { shouldFail = fail; hasStarted = false }
+        func enter() async throws {
+            sends += 1
+            hasStarted = true
+            startedContinuation?.resume(); startedContinuation = nil
+            await withCheckedContinuation { releaseContinuation = $0 }
+            if shouldFail { throw Fault("warmup_failed", "Provider rejected request") }
+        }
+        func waitUntilStarted() async {
+            if hasStarted { return }
+            await withCheckedContinuation { startedContinuation = $0 }
+        }
+        func release() {
+            releaseContinuation?.resume(); releaseContinuation = nil
+        }
+    }
+    final class ClockBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(_ date: Date) { current = date }
+        func now() -> Date { lock.withLock { current } }
+        func set(_ date: Date) { lock.withLock { current = date } }
+    }
+    let gate = Gate()
+    let clock = ClockBox(local(2026, 6, 10, 9, 0))
+    let owner = TallyOwner(clock: { clock.now() }, warmupSend: { _ in try await gate.enter() }, warmupJitter: { 60 }, inventory: {
+        InventoryRead(databaseIdentity: "db", credentials: [StoredCredential(storedID: "acct", name: "Account", key: "synthetic")])
+    }, timezone: { zone }, collect: { _ in GoObservation(windows: warmupQuotas(at: clock.now()).data!.windows) })
+    await owner.tick(); await owner.waitForCollection()
+    let id = try #require(await owner.snapshot().accounts.first?.id)
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "04:00")
+    await gate.arm(fail: true)
+    clock.set(local(2026, 6, 10, 9, 1))
+    try await owner.refresh(accountIDs: [id]); await owner.waitForCollection()
+    await owner.tick()
+    await gate.waitUntilStarted()
+    // Editing startTime while a send is in flight must not cancel it or drop its completion.
+    try await owner.setWarmupStartTime(accountID: id, startTime: "05:00")
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "05:30")
+    await gate.release()
+    await owner.waitForWarmup()
+    let afterFailure = try #require(await owner.warmupStatuses()[id])
+    #expect(afterFailure.suspended == true)
+    #expect(afterFailure.message == "Provider rejected request")
+    #expect(afterFailure.startTime == "05:30")
+    // Editing startTime while suspended must not clear suspended or resume.
+    try await owner.setWarmupStartTime(accountID: id, startTime: "06:00")
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "06:30")
+    let stillPaused = try #require(await owner.warmupStatuses()[id])
+    #expect(stillPaused.suspended == true)
+    #expect(stillPaused.message == "Provider rejected request")
+    #expect(stillPaused.startTime == "06:30")
+    #expect(await gate.sends == 1)
+    // Explicit Resume (unchanged enabled/model, omitted startTime) clears suspended and preserves startTime.
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap")
+    let resumed = try #require(await owner.warmupStatuses()[id])
+    #expect(resumed.suspended == false)
+    #expect(resumed.startTime == "06:30")
+    // Turning off then calling setWarmupStartTime keeps it disabled.
+    try await owner.setWarmup(accountID: id, enabled: false, model: "opencode-go/cheap")
+    try await owner.setWarmupStartTime(accountID: id, startTime: "07:00")
+    let disabled = try #require(await owner.warmupStatuses()[id])
+    #expect(disabled.enabled == false)
+    #expect(disabled.startTime == "07:00")
+    await owner.shutdown()
+}
+
+@Test func warmupLateStart2355FiresUnder120sPollingWithMaxJitter() async throws {
+    let zone = try #require(TimeZone(identifier: "America/New_York"))
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+        calendar.date(from: DateComponents(timeZone: zone, year: year, month: month, day: day, hour: hour, minute: minute, second: second))!
+    }
+    final class StateBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        private var sent = 0
+        init(_ date: Date) { current = date }
+        func now() -> Date { lock.withLock { current } }
+        func set(_ date: Date) { lock.withLock { current = date } }
+        func recordSend() { lock.withLock { sent += 1 } }
+        func sends() -> Int { lock.withLock { sent } }
+    }
+    let box = StateBox(local(2026, 6, 10, 23, 55, 10))
+    let owner = TallyOwner(clock: { box.now() }, warmupSend: { _ in box.recordSend() }, warmupJitter: { 1200 }, inventory: {
+        InventoryRead(databaseIdentity: "db", credentials: [StoredCredential(storedID: "acct", name: "Account", key: "synthetic")])
+    }, timezone: { zone }, collect: { _ in GoObservation(windows: warmupQuotas(at: box.now()).data!.windows) })
+    // Unfavorable poll phase: poll lands at 23:55:10, so next automatic 120s poll lands at 23:57:10 (after 23:57:00 nextAt, before midnight).
+    await owner.tick(); await owner.waitForCollection()
+    let id = try #require(await owner.snapshot().accounts.first?.id)
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "23:55")
+    #expect(await owner.warmupReadings()[id]?.nextAt == local(2026, 6, 10, 23, 57, 0))
+    box.set(local(2026, 6, 10, 23, 57, 10))
+    await owner.tick(); await owner.waitForCollection(); await owner.tick(); await owner.waitForWarmup()
+    #expect(box.sends() == 1)
+    await owner.shutdown()
 }
 
 @Test func warmupTracksChangingWindowsWithoutPlanAssumptions() throws {
