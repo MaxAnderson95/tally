@@ -72,7 +72,7 @@ export function useWarmups() {
           const updated = await request<Readings>(`/api/v1/accounts/${encodeURIComponent(accountID)}/warmup`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next.patch), signal: AbortSignal.timeout(10_000),
           })
-          setReadings(updated)
+          setReadings(previous => previous && accountID in updated ? { ...previous, [accountID]: updated[accountID] } : updated)
           setError(undefined)
           for (const entry of next.resolvers) entry.resolve()
         } catch (failure) {

@@ -127,7 +127,7 @@ public struct WarmupStatus: Codable, Sendable, Equatable {
             let candidate = allowed.addingTimeInterval(delay)
             if candidate <= latestSafe {
                 nextAt = candidate
-            } else if allowed <= latestSafe && window.cutoff.timeIntervalSince(window.start) < delay + Self.pollHeadroom {
+            } else if allowed <= latestSafe && window.cutoff.timeIntervalSince(window.start) < 1200 + Self.pollHeadroom {
                 nextAt = latestSafe
             } else {
                 let nextWindow = Self.activeWindow(for: window.nextStart, hour: hour, minute: minute, calendar: calendar)

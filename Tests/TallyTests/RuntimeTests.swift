@@ -397,8 +397,9 @@ private func warmupQuotas(at now: Date, used: Double = 0, reset: Date? = nil) ->
     #expect(afterFailure.suspended == true)
     #expect(afterFailure.message == "Provider rejected request")
     #expect(afterFailure.startTime == "05:30")
-    // Editing startTime while suspended must not clear suspended or resume.
+    // Editing startTime while suspended (including an idempotent retry with the same startTime) must not clear suspended or resume.
     try await owner.setWarmupStartTime(accountID: id, startTime: "06:00")
+    try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "06:30")
     try await owner.setWarmup(accountID: id, enabled: true, model: "opencode-go/cheap", startTime: "06:30")
     let stillPaused = try #require(await owner.warmupStatuses()[id])
     #expect(stillPaused.suspended == true)

@@ -305,18 +305,20 @@ public actor TallyOwner {
         }
         let previous = store.state.namespaces[namespace]?.warmups
         var value = previous?[accountID] ?? WarmupStatus()
-        let startTimeChanged: Bool = {
-            guard case let .some(nextStartTime) = startTime else { return false }
-            return nextStartTime != value.startTime
+        let explicitStartTime: Bool = {
+            if case .some = startTime { return true }
+            return false
         }()
-        let startTimeOnly = value.enabled == enabled && value.model == model && startTimeChanged
-        if case let .some(nextStartTime) = startTime { value.startTime = nextStartTime }
-        if startTimeOnly {
+        let startTimeOnly = value.enabled == enabled && value.model == model && explicitStartTime
+        if startTimeOnly, case let .some(nextStartTime) = startTime {
+            guard nextStartTime != value.startTime else { return }
+            value.startTime = nextStartTime
             if value.enabled && !value.suspended && warmingAccount != accountID {
                 value.nextAt = nil; value.resetAt = nil; value.scheduleTimeZone = nil
                 prepareWarmupSchedule(&value, accountID: accountID, credential: credential)
             }
         } else {
+            if case let .some(nextStartTime) = startTime { value.startTime = nextStartTime }
             value.enabled = enabled; value.model = model
             value.revision = UUID().uuidString
             value.nextAt = nil; value.resetAt = nil; value.scheduleTimeZone = nil; value.suspended = false
