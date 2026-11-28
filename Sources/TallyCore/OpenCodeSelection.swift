@@ -44,16 +44,18 @@ struct OpenCodeSelection: Sendable {
             request.setValue("Basic " + Data("opencode:\(registration.password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
             return request
         }
-        // Verify the service knows this stored row before sending the explicit selection command.
-        struct Integration: Decodable {
-            var connections: [Connection]
-            struct Connection: Decodable { var id: String }
+        // Activation is global; location-scoped integration discovery can return 404 for a stored credential.
+        struct CredentialList: Decodable {
+            struct Entry: Decodable { var id: String; var integrationID: String }
+            var data: [Entry]
         }
-        struct IntegrationResponse: Decodable { var data: Integration }
+        let integration = credential.integration ?? credential.provider
         do {
-            let (data, response) = try await send(request("api/integration/" + (credential.integration ?? credential.provider)))
+            let (data, response) = try await send(request("api/credential"))
             guard response.statusCode == 200,
-                  try JSONDecoder().decode(IntegrationResponse.self, from: data).data.connections.contains(where: { $0.id == credential.storedID }) else {
+                  try JSONDecoder().decode(CredentialList.self, from: data).data.contains(where: {
+                      $0.id == credential.storedID && $0.integrationID == integration
+                  }) else {
                 throw Fault("account_changed", "The Account is not available in the local OpenCode service. Refresh Accounts.")
             }
         } catch let fault as Fault { throw fault }

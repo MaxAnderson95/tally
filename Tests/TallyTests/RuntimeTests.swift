@@ -1440,23 +1440,30 @@ final class SelectionScenario: @unchecked Sendable {
     let database = data.appendingPathComponent("opencode.db")
     try Data().write(to: database)
     try Data(#"{"url":"http://127.0.0.1:4096","password":"synthetic-password"}"#.utf8).write(to: state.appendingPathComponent("service.json"))
+    let anthropic = StoredCredential(storedID: "cred_claude", name: "Personal", key: "access", provider: "anthropic")
     let credential = StoredCredential(storedID: "cred_test", name: "Test", key: "private", integration: "opencode-go")
     let console = StoredCredential(storedID: "cred_console", name: "Console", key: "access", integration: "opencode")
     let selection = OpenCodeSelection(environment: [:], home: home.path, send: { request in
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("opencode:synthetic-password".utf8).base64EncodedString())
         #expect(request.httpBody == nil)
         let url = try #require(request.url)
-        let integrations = ["/api/integration/opencode-go": "cred_test", "/api/integration/opencode": "cred_console"]
         if request.httpMethod == "GET" {
-            let id = try #require(integrations[url.path])
-            return (Data(#"{"data":{"connections":[{"type":"credential","id":"\#(id)"}]},"location":{}}"#.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            if url.path == "/api/integration/anthropic" {
+                return (Data(), HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+            }
+            #expect(url.path == "/api/credential")
+            return (Data(#"{"data":[{"id":"cred_claude","integrationID":"anthropic"},{"id":"cred_test","integrationID":"opencode-go"},{"id":"cred_console","integrationID":"opencode"}]}"#.utf8),
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         #expect(request.httpMethod == "POST")
-        #expect(["/api/credential/cred_test/activate", "/api/credential/cred_console/activate"].contains(url.path))
+        #expect(["/api/credential/cred_claude/activate", "/api/credential/cred_test/activate", "/api/credential/cred_console/activate"].contains(url.path))
         return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
     })
+    try await selection.activate(anthropic, databasePath: database.path)
     try await selection.activate(credential, databasePath: database.path)
     try await selection.activate(console, databasePath: database.path)
+    let missing = StoredCredential(storedID: "cred_missing", name: "Missing", key: "access", provider: "anthropic")
+    await #expect(throws: Fault.self) { try await selection.activate(missing, databasePath: database.path) }
     let other = home.appendingPathComponent("copy.db"); try Data().write(to: other)
     await #expect(throws: Fault.self) { try await selection.activate(credential, databasePath: other.path) }
     try FileManager.default.removeItem(at: state.appendingPathComponent("service.json"))
